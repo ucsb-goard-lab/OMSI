@@ -40,6 +40,20 @@ BETA               = 0.5
 KURTOSIS_THRESHOLD = 0.5
 TAU_RISE           = 0.05
 
+
+def _dff_kurtosis(fluo):
+    """Excess kurtosis on a simple dF/F (8th-percentile baseline normalization)."""
+    f = np.asarray(fluo, dtype=np.float64)
+    b = float(np.percentile(f, 8))
+    if abs(b) < 1.0:
+        b = 1.0
+    dff = (f - b) / abs(b)
+    m = np.mean(dff)
+    s = np.std(dff)
+    if s < 1e-9:
+        return 0.0
+    return float(np.mean(((dff - m) / s) ** 4) - 3.0)
+
 _METHODS = {
     'fmcsi':       {'label': 'fMCSI',   'color': '#4C72B0'},
     'oasis':       {'label': 'OASIS',   'color': '#55A868'},
@@ -275,7 +289,7 @@ def process_dataset(ds_folder, ground_truth_dir, model):
             spk = spk[~np.isnan(spk)]
             spk = spk / ephys_rate - t0
             spk = spk[(spk >= 0) & (spk <= dur)]
-            kurt = helpers.compute_kurtosis(fluo[np.newaxis, :])[0]
+            kurt = _dff_kurtosis(fluo)
             if kurt < KURTOSIS_THRESHOLD:
                 n_skipped += 1
                 continue
@@ -555,7 +569,7 @@ def _load_raster_cells(data_dir, raster_cells_npz, window=30.0, min_spikes=5):
         n_c = int(ref_npz['n_cells'])
         fs  = float(ref_npz['fs'])
         for ci in range(n_c):
-            kurt     = float(ref_npz[f'kurtosis_{ci}'])
+            kurt     = _dff_kurtosis(ref_npz[f'dff_{ci}'])
             true_spk = ref_npz[f'true_spikes_{ci}']
             true_spk = true_spk[np.isfinite(true_spk)]
             if len(true_spk) < min_spikes:

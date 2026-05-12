@@ -15,6 +15,46 @@ mpl.rcParams['pdf.fonttype'] = 42
 mpl.rcParams['ps.fonttype']  = 42
 mpl.rcParams['font.size']    = 7
 
+def _dff_kurtosis(fluo):
+    """Excess kurtosis computed on a dF/F-normalised trace (8th-pct baseline)."""
+    f = np.asarray(fluo, dtype=np.float64)
+    b = float(np.percentile(f, 8))
+    if abs(b) < 1.0:
+        b = 1.0
+    dff = (f - b) / abs(b)
+    m = np.mean(dff)
+    s = np.std(dff)
+    if s < 1e-9:
+        return 0.0
+    return float(np.mean(((dff - m) / s) ** 4) - 3.0)
+
+
+def _patch_records_kurtosis(all_records, data_dir):
+    """Replace stored kurtosis scalars with dF/F kurtosis from trace files."""
+    for method_key, recs in all_records.items():
+        traces_dir = os.path.join(data_dir, f'ground_truth_traces_{method_key}')
+        if not os.path.isdir(traces_dir):
+            continue
+        ds_counters = {}
+        npz_cache   = {}
+        for r in recs:
+            ds = r['dataset']
+            ci = ds_counters.get(ds, 0)
+            ds_counters[ds] = ci + 1
+            tp = os.path.join(traces_dir, f'{ds}_traces.npz')
+            if tp not in npz_cache:
+                try:
+                    npz_cache[tp] = np.load(tp, allow_pickle=False)
+                except Exception:
+                    npz_cache[tp] = None
+            npz = npz_cache.get(tp)
+            if npz is not None:
+                try:
+                    r['kurtosis'] = _dff_kurtosis(npz[f'dff_{ci}'])
+                except Exception:
+                    pass
+
+
 _DEFAULT_DATA_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), 'data', 'fig4')
 _DEFAULT_OUT_DIR  = os.path.join(
@@ -154,7 +194,7 @@ def _select_sensor_cells(data_dir, all_records, sensor):
                         npz[f'true_spikes_{local_idx}'], dtype=np.float64)
                     true_spikes = true_spikes[np.isfinite(true_spikes)]
                     fs          = float(npz['fs'])
-                    kurtosis    = float(npz[f'kurtosis_{local_idx}'])
+                    kurtosis    = _dff_kurtosis(dff)
             except Exception as exc:
                 print(f'    Warning loading {tp}: {exc}')
 
@@ -344,6 +384,7 @@ def plot_figure(data_dir=_DEFAULT_DATA_DIR, out_dir=_DEFAULT_OUT_DIR):
 
     print('Loading figure4 results...')
     all_records = _load_all_records(data_dir)
+    _patch_records_kurtosis(all_records, data_dir)
     if not all_records:
         print(f'No results found in {data_dir}. '
               f'Run figure4.py --mode test first.')

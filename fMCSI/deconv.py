@@ -173,6 +173,10 @@ def deconv(Y, params=None, true_spikes=None, benchmark=False):
         if 'auto_stop' not in p_copy:
             p_copy['auto_stop'] = True
 
+        # Support per-cell init: if 'init' is a list/tuple, extract the i-th entry
+        if 'init' in p_copy and isinstance(p_copy.get('init'), (list, tuple)):
+            p_copy['init'] = p_copy['init'][i]
+
         ts_cell  = true_spikes[i] if true_spikes is not None else None
         futures.append(
             _process_cell.remote(Y[i].copy(), i, p_copy, ts_cell, fs, n_frames)

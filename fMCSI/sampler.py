@@ -614,6 +614,15 @@ def cont_ca_sampler(Y, params=None):
 
     ef_h, ef_d, ef_nh, ef_nd, _ = _build_ef_nb(tau, diff_gr, t_arr, T, p, prec)
 
+    if params.get('T_supp') is not None:
+        ts = max(2, min(int(params['T_supp']), T))
+        if ts > len(ef_d):
+            ef_h, ef_d, ef_nh, ef_nd, _ = _build_ef_nb(tau, diff_gr, t_arr, T, p, 0.0)
+        ef_h  = ef_h[:ts]
+        ef_d  = ef_d[:ts]
+        ef_nh = ef_nh[:ts]
+        ef_nd = ef_nd[:ts]
+
     sg      = float(SAM['sg'])
     A_      = float(SAM['A_']) * diff_gr
     b_      = float(max(float(SAM['b_']), float(np.nanpercentile(Y, 8))))

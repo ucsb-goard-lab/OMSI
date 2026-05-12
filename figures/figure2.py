@@ -1327,9 +1327,9 @@ def plot_figure(data_dir=_DEFAULT_DATA_DIR):
             subset = _filter_cascade_shared_x(
                 subset, _tbl_filter(combined, 'Experiment', 'Tau_Sensitivity'), 'Tau')
         if _tbl_len(subset) > 0:
-            axA['tau_p'].plot(subset['Tau'], subset[prec_col], '.-',
+            axA['tau_p'].plot(subset['Tau'][:-1], subset[prec_col][:-1], '.-',
                               color=COLORS.get(model, 'k'))
-            axA['tau_r'].plot(subset['Tau'], subset[rec_col],  '.-',
+            axA['tau_r'].plot(subset['Tau'][:-1], subset[rec_col][:-1],  '.-',
                               color=COLORS.get(model, 'k'))
 
     for ax_key, xlabel, ylabel in [

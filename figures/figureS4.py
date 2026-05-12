@@ -17,6 +17,20 @@ mpl.rcParams['pdf.fonttype'] = 42
 mpl.rcParams['ps.fonttype']  = 42
 mpl.rcParams['font.size']    = 7
 
+def _dff_kurtosis(fluo):
+    """Excess kurtosis computed on a dF/F-normalised trace (8th-pct baseline)."""
+    f = np.asarray(fluo, dtype=np.float64)
+    b = float(np.percentile(f, 8))
+    if abs(b) < 1.0:
+        b = 1.0
+    dff = (f - b) / abs(b)
+    m = np.mean(dff)
+    s = np.std(dff)
+    if s < 1e-9:
+        return 0.0
+    return float(np.mean(((dff - m) / s) ** 4) - 3.0)
+
+
 _DEFAULT_DATA_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), 'data', 'fig4')
 _DEFAULT_OUT_DIR  = os.path.join(
@@ -99,6 +113,27 @@ def _load_all_records(data_dir):
                                         r.get('recall_window',    0.0)))
         all_records[method_key] = recs
         print(f'  Loaded {len(recs):5d} records for {method_key}')
+
+        # recompute kurtosis from stored traces (dF/F normalisation)
+        traces_dir  = os.path.join(data_dir, f'ground_truth_traces_{method_key}')
+        ds_counters = {}
+        npz_cache   = {}
+        for r in recs:
+            ds = r['dataset']
+            ci = ds_counters.get(ds, 0)
+            ds_counters[ds] = ci + 1
+            tp = os.path.join(traces_dir, f'{ds}_traces.npz')
+            if tp not in npz_cache:
+                try:
+                    npz_cache[tp] = np.load(tp, allow_pickle=False)
+                except Exception:
+                    npz_cache[tp] = None
+            npz = npz_cache.get(tp)
+            if npz is not None:
+                try:
+                    r['kurtosis'] = _dff_kurtosis(npz[f'dff_{ci}'])
+                except Exception:
+                    pass
 
     return all_records
 
