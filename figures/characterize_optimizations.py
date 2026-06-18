@@ -114,6 +114,7 @@ def run_T_supp_sweep(data_dir):
             elapsed = time.time() - t0
 
             per_cell_t = res['optim_times_per_cell']
+            nsweeps    = res['optim_nsamples']
             pred       = res['optim_spikes']
 
             prec_s, rec_s, _ = helpers.compute_accuracy_strict(true_spikes, pred)
@@ -129,6 +130,8 @@ def run_T_supp_sweep(data_dir):
                 'total_time':      elapsed,
                 'mean_time':       float(np.mean(per_cell_t)),
                 'std_time':        float(np.std(per_cell_t, ddof=1)),
+                'mean_nsweeps':    float(np.mean(nsweeps)),
+                'std_nsweeps':     float(np.std(nsweeps, ddof=1)),
                 'mean_f1_window':  float(np.mean(fb)),
                 'std_f1_window':   float(np.std(fb, ddof=1)),
                 'mean_f1_event':   float(np.mean(f1_e)),
@@ -137,6 +140,7 @@ def run_T_supp_sweep(data_dir):
             })
             print(f'    total={elapsed:.1f}s  '
                   f'mean_cell={np.mean(per_cell_t):.3f}s  '
+                  f'mean_sweeps={np.mean(nsweeps):.1f}  '
                   f'F_beta={np.mean(fb):.3f}  '
                   f'CosMIC={np.mean(cosmic):.3f}')
         except Exception as exc:
@@ -151,6 +155,8 @@ def run_T_supp_sweep(data_dir):
         T_supp       = np.array([r['T_supp']          for r in rows]),
         mean_time    = np.array([r['mean_time']        for r in rows]),
         std_time     = np.array([r['std_time']         for r in rows]),
+        mean_nsweeps = np.array([r['mean_nsweeps']     for r in rows]),
+        std_nsweeps  = np.array([r['std_nsweeps']      for r in rows]),
         mean_f1      = np.array([r['mean_f1_window']   for r in rows]),
         std_f1       = np.array([r['std_f1_window']    for r in rows]),
         mean_cosmic  = np.array([r['mean_cosmic']      for r in rows]),
@@ -858,8 +864,8 @@ def plot_combined_init(data_dir):
     plt.close(fig)
 
 
-_DEFAULT_CONV_TOL = 0.00067 # was 0.001; tightened 1.5x
-_DEFAULT_BURN_TOL = 0.005   # original default
+_DEFAULT_CONV_TOL = 10 ** -1.5  # was 0.00067; weakened, see combined_opt sweep
+_DEFAULT_BURN_TOL = 1e-4        # was 0.005; moved into the burn-in trough
 
 # min_sweeps=300 (the default) gates how soon the post-burn-in convergence
 # check can fire, which floors total sweep count regardless of how loose
@@ -878,12 +884,36 @@ _TEST_B           = 5
 _TEST_WIN         = 5
 _TEST_CHECK_EVERY = 5
 
-def _build_tol_grid(default_val, n_below=7, n_above=7):
-    # single geomspace symmetric in log around default_val: with an odd total
-    # point count its exact middle point is sqrt(a*b) = default_val, so it's
-    # included for free without bunching extra points (0.9x/1.1x) next to it.
+# default generate_synthetic_data() population is too easy to show a sweep
+# effect (median SNR ~50, almost all cells far above the SNR=2.0 production
+# gate) -- a chain barely past burn-in already lands on the right answer
+# regardless of conv_tol/burn_tol. Override snr per-cell here, test-only, to
+# resemble a real post-filter population: most cells sit just above the gate,
+# with a shrinking tail of better-quality cells, rather than a flat box.
+_TEST_SNR_FLOOR = 2.0   # matches the production skip_snr gate
+_TEST_SNR_SCALE = 2.0   # exponential decay scale above the floor
+_TEST_SNR_MAX   = 20.0  # clip the rare long tail
+
+# test-only cell count and session length for the conv_tol/burn_tol sweeps --
+# 100 cells over 20 min (vs. the default _N_CELLS=200 / _DURATION=2400s used
+# elsewhere) matches a typical real recording length and keeps these sweeps
+# fast to re-run.
+_TEST_N_CELLS  = 100
+_TEST_DURATION = 1200.0
+
+# none of these sweeps override max_sweeps, so they all run against the
+# sampler's default cap -- used to draw a reference line on sweep-count
+# panels marking "ran out the clock" vs. genuine convergence.
+_MAX_SWEEPS_DEFAULT = 2000
+
+def _build_tol_grid(default_val, lower_mult, upper_mult, n_below=4, n_above=5):
+    # geomspace from default_val*lower_mult to default_val*upper_mult.
+    # multipliers are picked per-parameter from a direct measurement of
+    # mean_sweeps vs. the tested value (see callers) -- outside that band
+    # the chain just runs to max_sweeps regardless of the tolerance, so
+    # testing there can never move F_beta.
     n_total = n_below + n_above + 1
-    return np.geomspace(default_val / 1000.0, default_val * 1000.0, n_total).tolist()
+    return np.geomspace(default_val * lower_mult, default_val * upper_mult, n_total).tolist()
 
 
 def _run_tol_sweep(dff, true_spikes, param_name, grid, fs, min_sweeps):
@@ -901,19 +931,23 @@ def _run_tol_sweep(dff, true_spikes, param_name, grid, fs, min_sweeps):
         try:
             res        = OMSI.deconv(dff, params=params, benchmark=True)
             per_cell_t = res['optim_times_per_cell']
+            nsweeps    = res['optim_nsamples']
             pred       = res['optim_spikes']
             prec_s, rec_s, _ = helpers.compute_accuracy_strict(true_spikes, pred)
             cosmic     = helpers.compute_cosmic(true_spikes, pred, fs)
             fb = np.array([_fbeta(float(prec_s[i]), float(rec_s[i]))
                             for i in range(len(prec_s))])
             rows.append({
-                'val':       val,
-                'mean_time': float(np.mean(per_cell_t)),
-                'std_time':  float(np.std(per_cell_t, ddof=1)),
-                'mean_f1':   float(np.mean(fb)),
-                'std_f1':    float(np.std(fb, ddof=1)),
+                'val':          val,
+                'mean_time':    float(np.mean(per_cell_t)),
+                'std_time':     float(np.std(per_cell_t, ddof=1)),
+                'mean_nsweeps': float(np.mean(nsweeps)),
+                'std_nsweeps':  float(np.std(nsweeps, ddof=1)),
+                'mean_f1':      float(np.mean(fb)),
+                'std_f1':       float(np.std(fb, ddof=1)),
             })
             print(f'    mean_cell={np.mean(per_cell_t):.3f}s  '
+                  f'mean_sweeps={np.mean(nsweeps):.1f}  '
                   f'F_beta={np.mean(fb):.3f}  CosMIC={np.mean(cosmic):.3f}')
         except Exception as exc:
             print(f'    FAILED: {exc}')
@@ -923,12 +957,14 @@ def _run_tol_sweep(dff, true_spikes, param_name, grid, fs, min_sweeps):
 def _save_tol_sweep(out_path, rows, default_val):
     np.savez(
         out_path,
-        tol         = np.array([r['val']       for r in rows]),
-        mean_time   = np.array([r['mean_time'] for r in rows]),
-        std_time    = np.array([r['std_time']  for r in rows]),
-        mean_f1     = np.array([r['mean_f1']   for r in rows]),
-        std_f1      = np.array([r['std_f1']    for r in rows]),
-        default_val = np.array([default_val]),
+        tol          = np.array([r['val']          for r in rows]),
+        mean_time    = np.array([r['mean_time']     for r in rows]),
+        std_time     = np.array([r['std_time']      for r in rows]),
+        mean_nsweeps = np.array([r['mean_nsweeps']  for r in rows]),
+        std_nsweeps  = np.array([r['std_nsweeps']   for r in rows]),
+        mean_f1      = np.array([r['mean_f1']       for r in rows]),
+        std_f1       = np.array([r['std_f1']        for r in rows]),
+        default_val  = np.array([default_val]),
     )
     print(f'\nSaved -> {out_path}')
 
@@ -938,11 +974,18 @@ def run_conv_tol_sweep(data_dir):
     out_path = os.path.join(data_dir, 'conv_tol_sweep.npz')
 
     print(f'Generating synthetic population '
-          f'(n={_N_CELLS}, T={_DURATION}s, fs={_FS}Hz, tau={_TAU}s)...')
+          f'(n={_TEST_N_CELLS}, T={_TEST_DURATION}s, fs={_FS}Hz, tau={_TAU}s, '
+          f'snr~floor={_TEST_SNR_FLOOR}+exp({_TEST_SNR_SCALE}))...')
+    snr = np.clip(_TEST_SNR_FLOOR + np.random.exponential(_TEST_SNR_SCALE, size=_TEST_N_CELLS),
+                  _TEST_SNR_FLOOR, _TEST_SNR_MAX)
     dff, true_spikes, _, _, _, _ = generate_synthetic_data(
-        n_cells=_N_CELLS, fs=_FS, duration=_DURATION, tau=_TAU)
+        n_cells=_TEST_N_CELLS, fs=_FS, duration=_TEST_DURATION, tau=_TAU, snr=snr)
 
-    grid = _build_tol_grid(_DEFAULT_CONV_TOL)
+    # measured mean_sweeps vs. conv_tol on this population: pinned at
+    # max_sweeps=2000 for everything from default_val/1000 up through
+    # ~default_val*10; the real decline runs from default_val itself out to
+    # default_val*1000. Range narrowed to where the curve actually moves.
+    grid = _build_tol_grid(_DEFAULT_CONV_TOL, lower_mult=1.0, upper_mult=1000.0)
     print(f'  Sweep ({len(grid)} conv_tol values): {[f"{v:.2e}" for v in grid]}')
 
     rows = _run_tol_sweep(dff, true_spikes, 'conv_tol', grid, _FS, _CONV_TEST_MIN_SWEEPS)
@@ -957,11 +1000,19 @@ def run_burn_tol_sweep(data_dir):
     out_path = os.path.join(data_dir, 'burn_tol_sweep.npz')
 
     print(f'Generating synthetic population '
-          f'(n={_N_CELLS}, T={_DURATION}s, fs={_FS}Hz, tau={_TAU}s)...')
+          f'(n={_TEST_N_CELLS}, T={_TEST_DURATION}s, fs={_FS}Hz, tau={_TAU}s, '
+          f'snr~floor={_TEST_SNR_FLOOR}+exp({_TEST_SNR_SCALE}))...')
+    snr = np.clip(_TEST_SNR_FLOOR + np.random.exponential(_TEST_SNR_SCALE, size=_TEST_N_CELLS),
+                  _TEST_SNR_FLOOR, _TEST_SNR_MAX)
     dff, true_spikes, _, _, _, _ = generate_synthetic_data(
-        n_cells=_N_CELLS, fs=_FS, duration=_DURATION, tau=_TAU)
+        n_cells=_TEST_N_CELLS, fs=_FS, duration=_TEST_DURATION, tau=_TAU, snr=snr)
 
-    grid = _build_tol_grid(_DEFAULT_BURN_TOL)
+    # measured mean_sweeps vs. burn_tol on this population: pinned at
+    # max_sweeps=2000 below ~default_val/500 (burn-in itself never
+    # completes) and above ~default_val*4 (burn-in completes too early,
+    # leaving real pre-convergence drift that conv_tol then never
+    # satisfies). The non-flat region sits between those two ends.
+    grid = _build_tol_grid(_DEFAULT_BURN_TOL, lower_mult=0.002, upper_mult=4.0)
     print(f'  Sweep ({len(grid)} burn_tol values): {[f"{v:.2e}" for v in grid]}')
 
     rows = _run_tol_sweep(dff, true_spikes, 'burn_tol', grid, _FS, _BURN_TEST_MIN_SWEEPS)
@@ -1029,7 +1080,17 @@ def plot_combined_opt(data_dir):
         if not os.path.exists(p):
             raise FileNotFoundError(f'No data at {p}.')
 
-    fig, axes = plt.subplots(4, 2, figsize=(4.8, 9.0), dpi=300)
+    fig, axes = plt.subplots(4, 3, figsize=(7.2, 9.0), dpi=300)
+
+    def _sweeps_panel(ax, x, mns, sns, xlabel):
+        ax.fill_between(x, mns - sns, mns + sns,
+                        color=_COLOR, alpha=0.25, linewidth=0)
+        ax.plot(x, mns, '.-', color=_COLOR, zorder=3)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel('sweep count')
+        ax.set_xscale('log')
+        ax.set_xlim(x.min(), x.max())
+        ax.set_ylim(0, _MAX_SWEEPS_DEFAULT)
 
     d            = np.load(t_supp_path)
     T_supp       = d['T_supp'].astype(float)
@@ -1037,6 +1098,8 @@ def plot_combined_opt(data_dir):
     st           = d['std_time']
     mf1          = d['mean_f1']
     sf1          = d['std_f1']
+    mns          = d['mean_nsweeps']
+    sns          = d['std_nsweeps']
     default_supp = int(d['default_supp'][0])
 
     mask = np.arange(len(T_supp))[1:-1]
@@ -1055,9 +1118,16 @@ def plot_combined_opt(data_dir):
         ax.set_xlabel('$T_{supp}$ (sec)')
         ax.set_ylabel(ylabel)
         ax.set_xscale('log')
+        ax.set_xlim(T_supp[mask].min() * (1.0 / _FS), T_supp[mask].max() * (1.0 / _FS))
         ax.set_ylim(bottom=0)
 
+    axes[0, 0].set_ylim(0, 500)
     axes[0, 1].set_ylim(0, 1)
+
+    _sweeps_panel(axes[0, 2], T_supp[mask] * (1.0 / _FS), mns[mask], sns[mask],
+                  '$T_{supp}$ (sec)')
+    axes[0, 2].axvline(default_supp * (1.0 / _FS), color='k', linestyle='--',
+                       linewidth=0.8, alpha=0.6)
 
     d           = np.load(conv_tol_path)
     tols        = d['tol'].astype(float)
@@ -1065,7 +1135,9 @@ def plot_combined_opt(data_dir):
     st          = d['std_time']
     mf1         = d['mean_f1']
     sf1         = d['std_f1']
-    default_val = float(d['default_val'][0])
+    mns         = d['mean_nsweeps']
+    sns         = d['std_nsweeps']
+    default_val = _DEFAULT_CONV_TOL  # updated default; npz still reflects the old value
 
     for ax, y, yerr, ylabel in [
         (axes[1, 0], mt,  st,  'time per cell (sec)'),
@@ -1079,9 +1151,14 @@ def plot_combined_opt(data_dir):
         ax.set_xlabel('convergence threshold')
         ax.set_ylabel(ylabel)
         ax.set_xscale('log')
+        ax.set_xlim(tols.min(), tols.max())
         ax.set_ylim(bottom=0)
 
     axes[1, 1].set_ylim(0, 1)
+
+    _sweeps_panel(axes[1, 2], tols, mns, sns, 'convergence threshold')
+    axes[1, 2].axvline(default_val, color='k', linestyle='--',
+                       linewidth=0.8, alpha=0.6)
 
     d           = np.load(burn_tol_path)
     tols        = d['tol'].astype(float)
@@ -1089,7 +1166,9 @@ def plot_combined_opt(data_dir):
     st          = d['std_time']
     mf1         = d['mean_f1']
     sf1         = d['std_f1']
-    default_val = float(d['default_val'][0])
+    mns         = d['mean_nsweeps']
+    sns         = d['std_nsweeps']
+    default_val = _DEFAULT_BURN_TOL  # updated default; npz still reflects the old value
 
     for ax, y, yerr, ylabel in [
         (axes[2, 0], mt,  st,  'time per cell (sec)'),
@@ -1103,9 +1182,14 @@ def plot_combined_opt(data_dir):
         ax.set_xlabel('burn-in completion threshold')
         ax.set_ylabel(ylabel)
         ax.set_xscale('log')
+        ax.set_xlim(tols.min(), tols.max())
         ax.set_ylim(bottom=0)
 
     axes[2, 1].set_ylim(0, 1)
+
+    _sweeps_panel(axes[2, 2], tols, mns, sns, 'burn-in completion threshold')
+    axes[2, 2].axvline(default_val, color='k', linestyle='--',
+                       linewidth=0.8, alpha=0.6)
 
     d           = np.load(snr_path)
     snr_levels  = d['snr_levels'].astype(float)
@@ -1113,6 +1197,8 @@ def plot_combined_opt(data_dir):
     std_fb      = d['std_fb'].astype(float)
     mean_cosmic = d['mean_cosmic'].astype(float)
     std_cosmic  = d['std_cosmic'].astype(float)
+    mean_ns     = d['mean_nsweeps'].astype(float)
+    std_ns      = d['std_nsweeps'].astype(float)
     threshold   = float(d['threshold'][0])
 
     for ax, mean, std, ylabel in [
@@ -1128,8 +1214,22 @@ def plot_combined_opt(data_dir):
                    linewidth=0.8, alpha=0.6)
         ax.set_xlabel('SNR')
         ax.set_ylabel(ylabel)
-        ax.set_xlim(left=0)
+        ax.set_xlim(x.min(), x.max())
         ax.set_ylim(0, 1.)
+
+    valid_ns = np.isfinite(mean_ns) & np.isfinite(std_ns)
+    ax = axes[3, 2]
+    ax.fill_between(snr_levels[valid_ns],
+                    mean_ns[valid_ns] - std_ns[valid_ns],
+                    mean_ns[valid_ns] + std_ns[valid_ns],
+                    color=_COLOR, alpha=0.25, linewidth=0)
+    ax.plot(snr_levels[valid_ns], mean_ns[valid_ns], '.-', color=_COLOR, zorder=3)
+    ax.axvline(threshold, color='k', linestyle='--',
+               linewidth=0.8, alpha=0.6)
+    ax.set_xlabel('SNR')
+    ax.set_ylabel('sweep count')
+    ax.set_xlim(snr_levels[valid_ns].min(), snr_levels[valid_ns].max())
+    ax.set_ylim(0, _MAX_SWEEPS_DEFAULT)
 
     fig.tight_layout()
     for sfx in ('png', 'svg'):
@@ -1277,10 +1377,12 @@ def run_snr_threshold_sweep(data_dir):
           f'{snr_levels[-1]:.2f}  (threshold={_SNR_THRESHOLD})')
     print(f'  {_SNR_N_CELLS} cells x {_SNR_DURATION}s each')
 
-    mean_fb    = np.full(_SNR_N_LEVELS, np.nan)
-    std_fb     = np.full(_SNR_N_LEVELS, np.nan)
-    mean_cosmic = np.full(_SNR_N_LEVELS, np.nan)
-    std_cosmic  = np.full(_SNR_N_LEVELS, np.nan)
+    mean_fb      = np.full(_SNR_N_LEVELS, np.nan)
+    std_fb       = np.full(_SNR_N_LEVELS, np.nan)
+    mean_cosmic  = np.full(_SNR_N_LEVELS, np.nan)
+    std_cosmic   = np.full(_SNR_N_LEVELS, np.nan)
+    mean_nsweeps = np.full(_SNR_N_LEVELS, np.nan)
+    std_nsweeps  = np.full(_SNR_N_LEVELS, np.nan)
 
     params = {
         'f':         _FS,
@@ -1303,8 +1405,10 @@ def run_snr_threshold_sweep(data_dir):
 
             cosmic_v   = helpers.compute_cosmic(true_spikes, pred, _FS)
 
-            mean_cosmic[k] = float(np.mean(cosmic_v))
-            std_cosmic[k]  = float(np.std(cosmic_v, ddof=1))
+            mean_cosmic[k]  = float(np.mean(cosmic_v))
+            std_cosmic[k]   = float(np.std(cosmic_v, ddof=1))
+            mean_nsweeps[k] = float(np.mean(res['optim_nsamples']))
+            std_nsweeps[k]  = float(np.std(res['optim_nsamples'], ddof=1))
 
             if res['optim_precision'] is not None:
                 fb_arr = np.array([
@@ -1315,18 +1419,21 @@ def run_snr_threshold_sweep(data_dir):
                 mean_fb[k] = float(np.nanmean(fb_arr))
                 std_fb[k]  = float(np.nanstd(fb_arr))
 
-            print(f'    F_beta={mean_fb[k]:.3f}  CosMIC={mean_cosmic[k]:.3f}')
+            print(f'    F_beta={mean_fb[k]:.3f}  CosMIC={mean_cosmic[k]:.3f}  '
+                  f'mean_sweeps={mean_nsweeps[k]:.1f}')
         except Exception as exc:
             print(f'    FAILED: {exc}')
 
     np.savez(
         out_path,
-        snr_levels  = snr_levels,
-        mean_fb     = mean_fb,
-        std_fb      = std_fb,
-        mean_cosmic = mean_cosmic,
-        std_cosmic  = std_cosmic,
-        threshold   = np.array([_SNR_THRESHOLD]),
+        snr_levels   = snr_levels,
+        mean_fb      = mean_fb,
+        std_fb       = std_fb,
+        mean_cosmic  = mean_cosmic,
+        std_cosmic   = std_cosmic,
+        mean_nsweeps = mean_nsweeps,
+        std_nsweeps  = std_nsweeps,
+        threshold    = np.array([_SNR_THRESHOLD]),
     )
     print(f'\nSaved -> {out_path}')
 

@@ -42,7 +42,7 @@ mpl.rcParams['font.size']    = 7
 np.random.seed(3)
 
 BETA = 0.5
-USE_STRICT_ACCURACY = True  # Hungarian one-to-one matching (compute_accuracy_strict)
+USE_STRICT_ACCURACY = False  # Hungarian one-to-one matching (compute_accuracy_strict)
 
 COLORS = {
     'fMCSI':        '#4C72B0',
@@ -1333,8 +1333,8 @@ def plot_figure(data_dir=_DEFAULT_DATA_DIR):
                               color=COLORS.get(model, 'k'))
 
     for ax_key, xlabel, ylabel in [
-        ('tau_p', '$\tau$ (s)', 'Precision'),
-        ('tau_r', '$\tau$ (s)', 'Recall'),
+        ('tau_p', r'$\tau$ (s)', 'Precision'),
+        ('tau_r', r'$\tau$ (s)', 'Recall'),
     ]:
         axA[ax_key].set_xlabel(xlabel)
         axA[ax_key].set_ylabel(ylabel)
@@ -1495,10 +1495,12 @@ if __name__ == '__main__':
         description='Figure 2: scaling and sensitivity benchmarks'
     )
     parser.add_argument('--mode', required=True,
-                        choices=['test', 'plot', 'noise-cells'],
+                        choices=['test', 'plot', 'noise-cells', 'cascade-samplerate'],
                         help='"test" runs all benchmarks; "plot" generates the figure; '
                              '"noise-cells" runs only the noise sensitivity benchmark and writes '
-                             'benchmark_noise_sensitivity_cells.npz without touching other result files')
+                             'benchmark_noise_sensitivity_cells.npz without touching other result files; '
+                             '"cascade-samplerate" runs only the CASCADE 7.5Hz-vs-30Hz comparison '
+                             'and writes cascade_7p5_vs_30hz_data.npz without touching other result files')
     parser.add_argument('--data-dir', default=_DEFAULT_DATA_DIR,
                         help='Directory for reading/writing result files')
     parser.add_argument('--no-fmcsi',   action='store_true', help='Skip fMCSI')
@@ -1526,5 +1528,9 @@ if __name__ == '__main__':
             run_cascade = not args.no_cascade,
             cells_only  = True,
         )
+    elif args.mode == 'cascade-samplerate':
+        os.makedirs(args.data_dir, exist_ok=True)
+        print('=== CASCADE 7.5 Hz vs 30 Hz comparison ===')
+        benchmark_cascade_sample_rate(args.data_dir, run_cascade=not args.no_cascade)
     else:
         plot_figure(data_dir=args.data_dir)

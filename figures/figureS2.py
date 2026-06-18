@@ -30,6 +30,15 @@ def _dff_kurtosis(fluo):
     return float(np.mean(((dff - m) / s) ** 4) - 3.0)
 
 
+def _snr_from_fluo(fluo):
+    f  = np.asarray(fluo, dtype=np.float64)
+    fv = f[np.isfinite(f)]
+    if len(fv) < 2:
+        return 0.0
+    mad = float(np.median(np.abs(np.diff(fv)))) / 0.6745
+    return (float(np.percentile(fv, 99)) - float(np.percentile(fv, 8))) / (mad + 1e-9)
+
+
 def _patch_records_kurtosis(all_records, data_dir):
     """Replace stored kurtosis scalars with dF/F kurtosis from trace files."""
     for method_key, recs in all_records.items():
@@ -177,7 +186,7 @@ def _select_sensor_cells(data_dir, all_records, sensor):
                          if r['dataset'] == ds]
         local_idx = ds_fmcsi_recs.index(rec)
 
-        dff = None; true_spikes = None; fs = None; kurtosis = None
+        dff = None; true_spikes = None; fs = None; kurtosis = None; snr = None
         pred_spikes = {}
         for mk in _TRACE_METHODS:
             tp = os.path.join(_traces_dir(data_dir, mk), f'{ds}_traces.npz')
@@ -196,6 +205,7 @@ def _select_sensor_cells(data_dir, all_records, sensor):
                     true_spikes = true_spikes[np.isfinite(true_spikes)]
                     fs          = float(npz['fs'])
                     kurtosis    = _dff_kurtosis(dff)
+                    snr         = _snr_from_fluo(dff)
             except Exception as exc:
                 print(f'    Warning loading {tp}: {exc}')
 
@@ -223,6 +233,7 @@ def _select_sensor_cells(data_dir, all_records, sensor):
             'cosmic':          float(rec.get('cosmic', np.nan)),
             'cosmic_by_method': cosmic_by_method,
             'kurtosis':        kurtosis,
+            'snr':             snr,
             'dff':             dff,
             'true_spikes':     true_spikes,
             'pred_spikes':     pred_spikes,
@@ -300,7 +311,7 @@ def _plot_single_raster(ax, cell, window=30.0,
         ax.set_xticks([])
         ax.set_xlabel('')
 
-    ann_text = (f'kurt = {cell["kurtosis"]:.1f}\n')
+    ann_text = (f'SNR = {cell["snr"]:.1f}\n')
     ax.text(window + 0.3, total_h * 0.55, ann_text,
             va='center', ha='left', fontsize=4.5, linespacing=1.4,
             color='#333333')

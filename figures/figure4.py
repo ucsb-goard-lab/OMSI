@@ -196,7 +196,7 @@ def _fbeta(precision, recall):
 
 
 def _get_fbeta(record):
-    return _fbeta(record['precision_window_oto'], record['recall_window_oto'])
+    return _fbeta(record['precision_window'], record['recall_window'])
 
 
 def get_tau(ds_folder):
@@ -306,20 +306,9 @@ def _build_params(fs, tau):
     g_rise  = float(np.exp(-1.0 / (TAU_RISE * fs)))
     g_decay = float(np.exp(-1.0 / (tau * fs)))
 
-    if g_decay - g_rise < 0.15 and tau * fs < 40:
-        # close-pole case: fast indicator (short tau_d) at high frame rate.
-        # the decay spans < 40 frames, so downsampling to ~40 Hz does not
-        # discard useful temporal information and resolves the close-pole problem.
-        # sensors that are close-pole only because of a very high frame rate
-        # (e.g. GCaMP6f at 122 Hz, tau*fs ≈ 61) are left in the standard path.
-        return {
-            'f': fs, 'p': 2, 'Nsamples': 200, 'B': 75, 'marg': 1, 'upd_gam': 1,
-            'g':       None,
-            'defg':    [g_rise, g_decay],
-            'TauStd':  [TAU_RISE * fs, tau * fs],
-            'con_lam': False,
-        }
-
+    # close-pole / fast-indicator cells (e.g. GCaMP8 at >=100 Hz) are detected
+    # and switched to an AR(1) kernel at the full frame rate automatically by
+    # OMSI.deconv -- no special-casing needed here.
     return {
         'f': fs, 'p': 2, 'Nsamples': 200, 'B': 75, 'marg': 1, 'upd_gam': 1,
         'g':       [g_rise + g_decay, -g_rise * g_decay],
@@ -384,21 +373,7 @@ def process_dataset(ds_folder, ground_truth_dir, model):
     spikes_list = []
 
     if model == 'fmcsi':
-        params         = _build_params(fs, tau)
-        _is_close_pole = params['g'] is None
-
-        if _is_close_pole:
-            # Option B: AR(1) at full frame rate — avoids the degenerate
-            # double-exp kernel without discarding any temporal information.
-            g_decay_full   = float(np.exp(-1.0 / (tau * fs)))
-            params['p']    = 1
-            params['g']    = None
-            params['defg'] = [0.0, g_decay_full]
-            params['TauStd'] = [0.0, tau * fs]
-            # Option C: let λ adapt each sweep so the chain self-corrects
-            # from any inflated NNLS initialization.
-            params['con_lam'] = False
-            print(f"  Close-pole: AR(1) at {fs:.0f} Hz, con_lam=False")
+        params = _build_params(fs, tau)
 
         # Batch into one deconv call so Ray parallelizes across cells rather
         # than paying Ray init overhead once per cell.

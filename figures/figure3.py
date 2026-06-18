@@ -53,7 +53,7 @@ model_colors = {
 }
 _MODEL_ORDER = ['fMCSI', 'MATLAB', 'CASCADE', 'OASIS']
 
-USE_STRICT_ACCURACY = True  # Hungarian one-to-one matching (compute_accuracy_strict)
+USE_STRICT_ACCURACY = False  # Hungarian one-to-one matching (compute_accuracy_strict)
 BETA = 0.5
 
 #   'threshold' : return every frame where s > height * sigma (default)

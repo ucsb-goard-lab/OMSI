@@ -518,7 +518,7 @@ def cont_ca_sampler(Y, params=None):
         'lam_pr': [0.1, 1.0],
         'auto_stop': True,
         'max_sweeps': 2000, 'min_sweeps': 300,
-        'burn_tol': 0.005, 'conv_tol': 0.00067,
+        'burn_tol': 1e-4, 'conv_tol': 10 ** -1.5,
         'check_every': 50,
         'prob_thresh': 0.85,
         'lam_scale': 0.002,
@@ -595,6 +595,32 @@ def cont_ca_sampler(Y, params=None):
         gr = np.array(params['defg'])
 
     gr = np.real(gr).astype(np.float64)
+
+    # fast-indicator / close-pole handling: when the rise and decay poles sit
+    # within 0.15 of each other and the decay spans fewer than 40 frames (e.g.
+    # GCaMP8 recorded at >=100 Hz), the double-exponential AR(2) kernel is
+    # nearly degenerate -- the rise time becomes sub-frame and numerically
+    # indistinguishable from the decay pole. Switch to a single-exponential
+    # AR(1) kernel at the full, un-decimated frame rate, which is always
+    # well-conditioned, and let the firing rate re-estimate every sweep so
+    # the chain can self-correct from an inflated initial NNLS spike count.
+    # Applied automatically for every cell that meets the criterion, not
+    # just in analysis scripts that pre-compute it.
+    if p > 1 and len(gr) == 2:
+        gr_decay_est = float(np.max(gr))
+        gr_rise_est  = float(np.min(gr))
+        tau_decay_frames = -dt / np.log(max(gr_decay_est, 1e-300))
+        if (gr_decay_est - gr_rise_est) < 0.15 and tau_decay_frames < 40.0:
+            p = 1
+            params['p']       = 1
+            params['g']       = None
+            params['defg']    = [0.0, gr_decay_est]
+            params['con_lam'] = False
+            con_lam = 0
+            params['init']    = get_init_sample(Y, params)
+            SAM = params['init']
+            g  = np.atleast_1d(SAM['g']).flatten()
+            gr = np.array([0.0, gr_decay_est])
 
     # if two roots are too close together the double-exp kernel degenerates,
     # so replace with defaults to keep the model identifiable

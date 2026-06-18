@@ -42,7 +42,7 @@ DURATION = 60 * 20
 TAU      = 1.2
 N_CELLS  = 500
 BETA     = 0.5
-USE_STRICT_ACCURACY = True  # Hungarian one-to-one matching (compute_accuracy_strict)
+USE_STRICT_ACCURACY = False  # Hungarian one-to-one matching (compute_accuracy_strict)
 
 COLORS = {
     'fMCSI':      '#4C72B0',
@@ -659,16 +659,24 @@ def print_stats(data_dir=_DEFAULT_DATA_DIR):
 
     n_cells = int(MINE_RESULTS['n_cells'])
 
+    true_spikes = list(MINE_RESULTS['true_spikes'])
+    MINE_RESULTS        = _with_window_metrics(MINE_RESULTS,        'optim',   true_spikes)
+    MATLAB_RESULTS      = _with_window_metrics(MATLAB_RESULTS,      'tradmat', true_spikes)
+    OASIS_RESULTS       = _with_window_metrics(OASIS_RESULTS,       'oasis',   true_spikes)
+    CASCADE_GPU_RESULTS = _with_window_metrics(CASCADE_GPU_RESULTS, 'cascade', true_spikes)
+    CASCADE_CPU_RESULTS = _with_window_metrics(CASCADE_CPU_RESULTS, 'cascade', true_spikes)
+
+    # mirror plot_figure's metric selection so these stats match the saved figure
+    suffix = '' if USE_STRICT_ACCURACY else '_window'
     method_entries = [
-        ('OMSI',       MINE_RESULTS,        'optim_precision',    'optim_recall',    'optim_spikes',    float(MINE_RESULTS['optim_time'])),
-        ('MATLAB',      MATLAB_RESULTS,      'tradmat_precision',  'tradmat_recall',  'tradmat_spikes',  float(MATLAB_RESULTS['tradmat_time'])),
-        ('OASIS',       OASIS_RESULTS,       'oasis_precision',    'oasis_recall',    'oasis_spikes',    float(OASIS_RESULTS['oasis_time'])),
-        ('CASCADE_GPU', CASCADE_GPU_RESULTS, 'cascade_precision',  'cascade_recall',  'cascade_spikes',  float(CASCADE_GPU_RESULTS['cascade_time'])),
-        ('CASCADE_CPU', CASCADE_CPU_RESULTS, 'cascade_precision',  'cascade_recall',  'cascade_spikes',  float(CASCADE_CPU_RESULTS['cascade_time'])),
+        ('OMSI',        MINE_RESULTS,        f'optim_precision{suffix}',   f'optim_recall{suffix}',   'optim_spikes',   float(MINE_RESULTS['optim_time'])),
+        ('MATLAB',      MATLAB_RESULTS,      f'tradmat_precision{suffix}', f'tradmat_recall{suffix}', 'tradmat_spikes', float(MATLAB_RESULTS['tradmat_time'])),
+        ('OASIS',       OASIS_RESULTS,       f'oasis_precision{suffix}',   f'oasis_recall{suffix}',   'oasis_spikes',   float(OASIS_RESULTS['oasis_time'])),
+        ('CASCADE_GPU', CASCADE_GPU_RESULTS, f'cascade_precision{suffix}', f'cascade_recall{suffix}', 'cascade_spikes', float(CASCADE_GPU_RESULTS['cascade_time'])),
+        ('CASCADE_CPU', CASCADE_CPU_RESULTS, f'cascade_precision{suffix}', f'cascade_recall{suffix}', 'cascade_spikes', float(CASCADE_CPU_RESULTS['cascade_time'])),
     ]
 
     from OMSI.helpers import compute_cosmic
-    true_spikes = list(MINE_RESULTS['true_spikes'])
     fs = float(MINE_RESULTS['f'])
 
     print('\n' + '='*78)
