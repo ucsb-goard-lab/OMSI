@@ -1,3 +1,77 @@
+# -*- coding: utf-8 -*-
+"""
+figures/characterize_optimizations.py
+
+Benchmarks fMCSI optimizer settings and initialization strategies via parameter sweeps on synthetic data.
+
+Functions
+---------
+_init_tau
+    Estimate AR time constants from a fluorescence trace.
+_default_T_supp
+    Compute default support length for the exponential filter basis.
+_build_T_supp_grid
+    Build a geometric grid of T_supp values to sweep.
+run_T_supp_sweep
+    Run sweep over T_supp values and save results.
+plot_T_supp_sweep
+    Plot saved T_supp sweep results.
+_fbeta
+    Compute F-beta score from precision and recall.
+_sp_peaks
+    Detect spike peaks from a continuous spike signal.
+_nnls_init
+    Compute NNLS-based initialization for spike deconvolution.
+_foopsi_init
+    Compute FOOPSI-based initialization for spike deconvolution.
+run_init_comparison
+    Run NNLS vs. FOOPSI init comparison and save results.
+plot_init_comparison
+    Plot saved init comparison results.
+_make_foopsi_init
+    Build a FOOPSI-initialized fMCSI sample dict.
+run_fmcsi_init_comparison
+    Run fMCSI with NNLS vs. FOOPSI init and save results.
+plot_fmcsi_init_comparison
+    Plot saved fMCSI init comparison results.
+plot_combined_init
+    Plot combined init comparison figure.
+_build_tol_grid
+    Build a geometric grid of tolerance values to sweep.
+_run_tol_sweep
+    Run a tolerance parameter sweep and collect results.
+_save_tol_sweep
+    Save tolerance sweep results to .npz.
+run_conv_tol_sweep
+    Run convergence tolerance sweep and save results.
+run_burn_tol_sweep
+    Run burn-in tolerance sweep and save results.
+_plot_tol_sweep
+    Plot a saved tolerance sweep .npz file.
+plot_conv_tol_sweep
+    Plot saved convergence tolerance sweep.
+plot_burn_tol_sweep
+    Plot saved burn-in tolerance sweep.
+plot_combined_opt
+    Plot combined optimization parameter sweep figure.
+_dff_snr
+    Estimate SNR of a dF/F trace.
+run_snr_filter_sweep
+    Run SNR filter sweep and save per-cell accuracy.
+plot_snr_filter_sweep
+    Plot saved SNR filter sweep results.
+run_snr_threshold_sweep
+    Run SNR threshold sweep across synthetic populations.
+plot_snr_threshold_sweep
+    Plot saved SNR threshold sweep results.
+_snr_get_sensor
+    Map a dataset name to a calcium sensor label.
+print_snr_stats
+    Print SNR statistics by sensor for figure4 datasets.
+
+
+DMM, March 2026
+"""
 
 import argparse
 import os
@@ -38,7 +112,26 @@ _COLOR    = '#4C72B0'
 
 
 def _init_tau(Y_cell, fs, p=2):
+    """Estimate AR time constants from an observed fluorescence trace.
 
+    Parameters
+    ----------
+    Y_cell : array_like
+        Single-cell dF/F trace.
+    fs : float
+        Sampling rate in Hz.
+    p : int, optional
+        AR model order. Default is 2.
+
+    Returns
+    -------
+    tau : ndarray
+        Time constants in frames.
+    gr : ndarray
+        Corresponding AR roots, clipped to (1e-10, 0.998).
+    diff_gr : float
+        Difference between the two AR roots.
+    """
     params = {'f': fs, 'p': p, 'defg': [0.6, 0.95]}
     try:
         SAM = get_init_sample(Y_cell, params)
@@ -56,7 +149,26 @@ def _init_tau(Y_cell, fs, p=2):
 
 
 def _default_T_supp(tau, diff_gr, T, p=2, prec=1e-2):
+    """Compute the default support length for the exponential filter basis.
 
+    Parameters
+    ----------
+    tau : ndarray
+        AR time constants in frames.
+    diff_gr : float
+        Difference between AR roots.
+    T : int
+        Total number of frames.
+    p : int, optional
+        AR model order. Default is 2.
+    prec : float, optional
+        Precision threshold for truncating the filter. Default is 1e-2.
+
+    Returns
+    -------
+    int
+        Number of frames in the default support.
+    """
     t_arr = np.arange(T + 1, dtype=np.float64)
     _, ef_d, _, _, _ = _build_ef_nb(tau, diff_gr, t_arr, T, p, prec)
 
@@ -64,7 +176,24 @@ def _default_T_supp(tau, diff_gr, T, p=2, prec=1e-2):
 
 
 def _build_T_supp_grid(default_supp, T, n_shorter=8, n_longer=8):
+    """Build a geometric grid of T_supp values spanning below and above the default.
 
+    Parameters
+    ----------
+    default_supp : int
+        Default support length to center the grid around.
+    T : int
+        Maximum frame count (full-length reference point).
+    n_shorter : int, optional
+        Number of grid points below the default. Default is 8.
+    n_longer : int, optional
+        Number of grid points above the default. Default is 8.
+
+    Returns
+    -------
+    list of int
+        Sorted unique T_supp values including default, shorter, longer, and T.
+    """
     shorter = np.round(
         np.geomspace(0.01, default_supp - 1, n_shorter)
     ).astype(int)
@@ -76,12 +205,19 @@ def _build_T_supp_grid(default_supp, T, n_shorter=8, n_longer=8):
 
 
 def run_T_supp_sweep(data_dir):
+    """Run a sweep over T_supp values, benchmark fMCSI on a synthetic population, and save results.
 
+    Parameters
+    ----------
+    data_dir : str
+        Directory where the output .npz file is written.
+    """
     os.makedirs(data_dir, exist_ok=True)
     out_path = os.path.join(data_dir, 'T_supp_sweep.npz')
 
-    print(f'Generating synthetic population '
-          f'(n={_N_CELLS}, T={_DURATION}s, fs={_FS}Hz, tau={_TAU}s)...')
+    print('Generating synthetic population '
+          '(n={}, T={}s, fs={}Hz, tau={}s)...'.format(
+              _N_CELLS, _DURATION, _FS, _TAU))
     dff, true_spikes, _, _, _, _ = generate_synthetic_data(
         n_cells=_N_CELLS, fs=_FS, duration=_DURATION, tau=_TAU
     )
@@ -90,17 +226,19 @@ def run_T_supp_sweep(data_dir):
 
     tau_rep, gr_rep, diff_gr_rep = _init_tau(dff[0], _FS)
     default_supp = _default_T_supp(tau_rep, diff_gr_rep, n_frames)
-    print(f'  tau (frames): {tau_rep[0]:.2f}, {tau_rep[1]:.2f}  '
-          f'gr: {gr_rep[0]:.4f}, {gr_rep[1]:.4f}')
-    print(f'  Default T_supp (prec=1e-2): {default_supp} / {n_frames} frames')
+    print('  Tau (frames): {:.2f}, {:.2f}  '
+          'gr: {:.4f}, {:.4f}'.format(
+              tau_rep[0], tau_rep[1], gr_rep[0], gr_rep[1]))
+    print('  Default T_supp (prec=1e-2): {} / {} frames'.format(
+        default_supp, n_frames))
 
     T_supp_grid = _build_T_supp_grid(default_supp, n_frames)
-    print(f'  Sweep ({len(T_supp_grid)} values): {T_supp_grid}')
+    print('  Sweep ({} values): {}'.format(len(T_supp_grid), T_supp_grid))
 
     rows = []
     for ts in T_supp_grid:
         label = 'T' if ts == n_frames else str(ts)
-        print(f'\n  T_supp={ts} ...')
+        print('\n  T_supp={} ...'.format(ts))
         params = {
             'f':         _FS,
             'p':         2,
@@ -138,13 +276,15 @@ def run_T_supp_sweep(data_dir):
                 'mean_cosmic':     float(np.mean(cosmic)),
                 'std_cosmic':      float(np.std(cosmic, ddof=1)),
             })
-            print(f'    total={elapsed:.1f}s  '
-                  f'mean_cell={np.mean(per_cell_t):.3f}s  '
-                  f'mean_sweeps={np.mean(nsweeps):.1f}  '
-                  f'F_beta={np.mean(fb):.3f}  '
-                  f'CosMIC={np.mean(cosmic):.3f}')
+            print('    Total={:.1f}s  '
+                  'mean_cell={:.3f}s  '
+                  'mean_sweeps={:.1f}  '
+                  'F_beta={:.3f}  '
+                  'CosMIC={:.3f}'.format(
+                      elapsed, np.mean(per_cell_t), np.mean(nsweeps),
+                      np.mean(fb), np.mean(cosmic)))
         except Exception as exc:
-            print(f'    FAILED: {exc}')
+            print('    FAILED: {}'.format(exc))
 
     if not rows:
         print('No results collected.')
@@ -164,15 +304,21 @@ def run_T_supp_sweep(data_dir):
         default_supp = np.array([default_supp]),
         n_frames     = np.array([n_frames]),
     )
-    print(f'\nSaved -> {out_path}')
+    print('\nSaved to {}.'.format(out_path))
 
 
 def plot_T_supp_sweep(data_dir):
+    """Plot time-per-cell and F_beta vs. T_supp from a saved sweep .npz file.
 
+    Parameters
+    ----------
+    data_dir : str
+        Directory containing the T_supp_sweep.npz file.
+    """
     out_path = os.path.join(data_dir, 'T_supp_sweep.npz')
     if not os.path.exists(out_path):
         raise FileNotFoundError(f'No data at {out_path}. Run --mode test first.')
-    
+
     d            = np.load(out_path)
     T_supp       = d['T_supp'].astype(float)
     mt           = d['mean_time']
@@ -184,10 +330,6 @@ def plot_T_supp_sweep(data_dir):
     default_supp = int(d['default_supp'][0])
     n_frames     = int(d['n_frames'][0])
 
-    # print('T_shuff shape is ', np.shape(T_supp))
-    # print(T_supp)
-    # print(T_supp * (1.0 / _FS))
-
     fig, axes = plt.subplots(1, 2, figsize=(4.8, 2.25), dpi=300)
 
     for ax, y, yerr, ylabel in [
@@ -197,17 +339,12 @@ def plot_T_supp_sweep(data_dir):
         mask = np.arange(len(T_supp))[1:-1]
         mask = np.hstack([mask[0:4], mask[5], mask[7:]]).astype(int)
         print(mask)
-        # ax.plot(T_supp[:-1] * (1.0 / _FS), y[:-1], '.-', color=_COLOR, zorder=3)
         ax.plot(T_supp[mask] * (1.0 / _FS), y[mask], '.-', color=_COLOR, zorder=3)
         if ylabel == 'time per cell (sec)':
             ax.fill_between(T_supp[mask] * (1.0 / _FS), y[mask] - yerr[mask], y[mask] + yerr[mask],
                             color=_COLOR, alpha=0.25, linewidth=0)
         ax.axvline(default_supp * (1.0 / _FS), color='k', linestyle='--',
                    linewidth=0.8, alpha=0.6, label='default')
-        # ax.axhline(0, color='k', linestyle='--',
-        #            linewidth=0.8, alpha=0.6, label='T')
-        # print('default T_supp:',default_supp * (1.0 / _FS), 'sec', f'({default_supp} frames)')
-        # print('shortest window tested is' f'{T_supp[0] * (1.0 / _FS):.2f} sec ({T_supp[0]} frames)')
         ax.set_xlabel('$T_{supp}$ (sec)')
         ax.set_ylabel(ylabel)
         ax.set_xscale('log')
@@ -217,15 +354,31 @@ def plot_T_supp_sweep(data_dir):
 
     fig.tight_layout()
     for sfx in ('png', 'svg'):
-        out = os.path.join(data_dir, f'T_supp_sweep.{sfx}')
+        out = os.path.join(data_dir, 'T_supp_sweep.{}'.format(sfx))
         fig.savefig(out, dpi=300, bbox_inches='tight')
-        print(f'Saved -> {out}')
+        print('Saved to {}.'.format(out))
     plt.close(fig)
 
 
 _BETA = 0.5
 
 def _fbeta(precision, recall, beta=_BETA):
+    """Compute the F-beta score from precision and recall.
+
+    Parameters
+    ----------
+    precision : float
+        Precision value in [0, 1].
+    recall : float
+        Recall value in [0, 1].
+    beta : float, optional
+        Beta weight. Default is _BETA (0.5).
+
+    Returns
+    -------
+    float
+        F-beta score, or 0.0 if denominator is zero.
+    """
     b2 = beta ** 2
     denom = b2 * precision + recall
     return (1 + b2) * precision * recall / denom if denom > 0 else 0.0
@@ -238,7 +391,24 @@ _TRACE_WINDOW  = 10.0
 
 
 def _sp_peaks(sp, fs, thresh_frac=0.15, min_gap_s=0.05):
+    """Detect spike peak indices from a continuous spike amplitude signal.
 
+    Parameters
+    ----------
+    sp : array_like or None
+        Continuous spike signal.
+    fs : float
+        Sampling rate in Hz.
+    thresh_frac : float, optional
+        Fraction of max amplitude used as peak threshold. Default is 0.15.
+    min_gap_s : float, optional
+        Minimum gap between peaks in seconds. Default is 0.05.
+
+    Returns
+    -------
+    ndarray
+        Array of peak frame indices as floats.
+    """
     if sp is None or np.max(sp) < 1e-12:
         return np.array([], dtype=float)
     thresh = thresh_frac * np.max(sp)
@@ -248,7 +418,24 @@ def _sp_peaks(sp, fs, thresh_frac=0.15, min_gap_s=0.05):
 
 
 def _nnls_init(Y_cell, fs, p=2):
+    """Compute NNLS-based spike and calcium initialization for a single cell.
 
+    Parameters
+    ----------
+    Y_cell : array_like
+        Single-cell dF/F trace.
+    fs : float
+        Sampling rate in Hz.
+    p : int, optional
+        AR model order. Default is 2.
+
+    Returns
+    -------
+    sp : ndarray
+        Estimated spike amplitudes per frame.
+    calcium : ndarray
+        Reconstructed calcium trace.
+    """
     sn = _get_sn(Y_cell, [0.25, 0.5])
     g  = _estimate_time_constants(Y_cell, p, sn)
     h  = _ar_kernel(g, len(Y_cell))
@@ -258,19 +445,39 @@ def _nnls_init(Y_cell, fs, p=2):
 
 
 def _foopsi_init(Y_cell, fs, tau=_TAU):
+    """Compute FOOPSI-based spike and calcium initialization for a single cell.
 
+    Parameters
+    ----------
+    Y_cell : array_like
+        Single-cell dF/F trace.
+    fs : float
+        Sampling rate in Hz.
+    tau : float, optional
+        Calcium decay time constant in seconds. Default is _TAU.
+
+    Returns
+    -------
+    s : ndarray
+        Non-negative spike signal estimated via L-BFGS-B.
+    calcium : ndarray
+        Reconstructed calcium trace from the spike signal.
+    """
     T   = len(Y_cell)
     sn  = _get_sn(Y_cell, [0.25, 0.5])
     g   = np.exp(-1.0 / (fs * tau))
     lam = sn
 
     def _fwd(s):
+        """Apply forward AR filter."""
         return _lfilter([1.0], [1.0, -g], s)
 
     def _adj(v):
+        """Apply adjoint AR filter."""
         return _lfilter([1.0], [1.0, -g], v[::-1])[::-1]
 
     def _obj(s):
+        """Evaluate L1-penalized least-squares objective and gradient."""
         c   = _fwd(s)
         res = c - Y_cell
         f   = 0.5 * float(np.dot(res, res)) + lam * float(s.sum())
@@ -287,12 +494,19 @@ def _foopsi_init(Y_cell, fs, tau=_TAU):
 
 
 def run_init_comparison(data_dir):
+    """Run NNLS and FOOPSI initializations on a synthetic population and save correlation results.
 
+    Parameters
+    ----------
+    data_dir : str
+        Directory where the output .npz file is written.
+    """
     os.makedirs(data_dir, exist_ok=True)
     out_path = os.path.join(data_dir, 'init_comparison.npz')
 
-    print(f'Generating synthetic population '
-          f'(n={_N_CELLS}, T={_INIT_DURATION}s, fs={_FS}Hz, tau={_TAU}s)...')
+    print('Generating synthetic population '
+          '(n={}, T={}s, fs={}Hz, tau={}s)...'.format(
+              _N_CELLS, _INIT_DURATION, _FS, _TAU))
     dff, true_spikes, clean_traces, _, _, _ = generate_synthetic_data(
         n_cells=_N_CELLS, fs=_FS, duration=_INIT_DURATION, tau=_TAU
     )
@@ -325,10 +539,14 @@ def run_init_comparison(data_dir):
         r_cross[i]       = float(np.corrcoef(ca_n,   ca_f)[0, 1])
 
         if (i + 1) % 10 == 0:
-            print(f'  {i+1}/{_N_CELLS}  '
-                  f'nnls={np.mean(nnls_times[:i+1])*1e3:.1f}ms  '
-                  f'foopsi={np.mean(foopsi_times[:i+1])*1e3:.1f}ms  '
-                  f'r_cross={np.mean(r_cross[:i+1]):.3f}')
+            print('  {}/{}  '
+                  'nnls={:.1f}ms  '
+                  'foopsi={:.1f}ms  '
+                  'r_cross={:.3f}'.format(
+                      i + 1, _N_CELLS,
+                      np.mean(nnls_times[:i + 1]) * 1e3,
+                      np.mean(foopsi_times[:i + 1]) * 1e3,
+                      np.mean(r_cross[:i + 1])))
 
     np.savez(
         out_path,
@@ -348,11 +566,17 @@ def run_init_comparison(data_dir):
         n_frames         = np.array([dff.shape[1]]),
         fs               = np.array([_FS]),
     )
-    print(f'\nSaved -> {out_path}')
+    print('\nSaved to {}.'.format(out_path))
 
 
 def plot_init_comparison(data_dir):
+    """Plot example traces and timing scatter from a saved init comparison .npz file.
 
+    Parameters
+    ----------
+    data_dir : str
+        Directory containing the init_comparison.npz file.
+    """
     out_path = os.path.join(data_dir, 'init_comparison.npz')
     if not os.path.exists(out_path):
         raise FileNotFoundError(f'No data at {out_path}. Run --mode init-test first.')
@@ -388,6 +612,7 @@ def plot_init_comparison(data_dir):
     }
 
     def _norm(x):
+        """Normalize array to [0, 1]."""
         lo, hi = np.min(x), np.max(x)
         return (x - lo) / (hi - lo + 1e-12)
 
@@ -408,9 +633,11 @@ def plot_init_comparison(data_dir):
 
         gt_lo, gt_hi = gt.min(), gt.max()
         def _scale_gt(x):
+            """Scale ground-truth trace to [0, 1] using its own min/max."""
             return (x - gt_lo) / (gt_hi - gt_lo + 1e-12)
 
         def _scale_sp(x):
+            """Scale spike signal to [0, 1] by its maximum."""
             hi = np.max(x) if np.max(x) > 1e-12 else 1.0
             return x / hi
 
@@ -436,23 +663,17 @@ def plot_init_comparison(data_dir):
                 transform=ax.transAxes, fontsize=5.5, fontweight='bold',
                 va='top', ha='left', color='k')
         if row_idx == 0:
-            ax.legend(frameon=False, fontsize=6, loc='upper left')#,
+            ax.legend(frameon=False, fontsize=6, loc='upper left')
 
     ax_t = axd['time']
 
     bins = np.linspace(0, 200, 30)
-    # ax_t.hist(foopsi_times * 1e3, bins=bins, color=_FOOPSI_COLOR,
-    #           alpha=0.6, label='FOOPSI', edgecolor='none')
-    # ax_t.hist(nnls_times   * 1e3, bins=bins, color=_NNLS_COLOR,
-    #           alpha=0.6, label='NNLS',   edgecolor='none')
 
     ax_t.scatter(foopsi_times * 1e3, nnls_times * 1e3, color='k', s=1)
 
     ax_t.set_xlabel('FOOPSI time per cell (msec)')
     ax_t.set_ylabel('NNLS time per cell (msec)')
 
-    # ax_t.set_xlim([0,200])
-    # ax_t.legend(frameon=False, fontsize=6, reverse=True, loc='upper right')
     ax_t.axis('equal')
     ax_t.set_xlim(bottom=0)
     ax_t.set_ylim(bottom=0)
@@ -466,14 +687,31 @@ def plot_init_comparison(data_dir):
     ax_h.set_xlim([0,1])
 
     for sfx in ('png', 'svg'):
-        out = os.path.join(data_dir, f'init_comparison.{sfx}')
+        out = os.path.join(data_dir, 'init_comparison.{}'.format(sfx))
         fig.savefig(out, dpi=300, bbox_inches='tight')
-        print(f'Saved -> {out}')
+        print('Saved to {}.'.format(out))
     plt.close(fig)
 
 
 def _make_foopsi_init(Y_cell, fs, tau=_TAU, p=2):
+    """Build an fMCSI-compatible sample dict initialized from the FOOPSI spike estimate.
 
+    Parameters
+    ----------
+    Y_cell : array_like
+        Single-cell dF/F trace.
+    fs : float
+        Sampling rate in Hz.
+    tau : float, optional
+        Calcium decay time constant in seconds. Default is _TAU.
+    p : int, optional
+        AR model order. Default is 2.
+
+    Returns
+    -------
+    dict
+        fMCSI sample dict with FOOPSI-derived spiketimes_, lam_, and C_in fields.
+    """
     init_params = {'f': fs, 'p': p, 'defg': [0.6, 0.95]}
     SAM = dict(get_init_sample(Y_cell, init_params))
 
@@ -497,12 +735,19 @@ def _make_foopsi_init(Y_cell, fs, tau=_TAU, p=2):
 
 
 def run_fmcsi_init_comparison(data_dir):
+    """Run fMCSI with NNLS and FOOPSI inits on a synthetic population and save accuracy results.
 
+    Parameters
+    ----------
+    data_dir : str
+        Directory where the output .npz file is written.
+    """
     os.makedirs(data_dir, exist_ok=True)
     out_path = os.path.join(data_dir, 'fmcsi_init_comparison.npz')
 
-    print(f'Generating synthetic population '
-          f'(n={_N_CELLS}, T={_INIT_DURATION}s, fs={_FS}Hz, tau={_TAU}s)...')
+    print('Generating synthetic population '
+          '(n={}, T={}s, fs={}Hz, tau={}s)...'.format(
+              _N_CELLS, _INIT_DURATION, _FS, _TAU))
     dff, true_spikes, clean_traces, _, _, _ = generate_synthetic_data(
         n_cells=_N_CELLS, fs=_FS, duration=_INIT_DURATION, tau=_TAU
     )
@@ -510,7 +755,7 @@ def run_fmcsi_init_comparison(data_dir):
 
     print('Pre-computing FOOPSI inits...')
     foopsi_inits = [_make_foopsi_init(dff[i], _FS) for i in range(_N_CELLS)]
-    print(f'  Done ({_N_CELLS} inits).')
+    print('  Done ({} inits).'.format(_N_CELLS))
 
     base_params = {'f': _FS, 'p': 2, 'auto_stop': True}
 
@@ -542,12 +787,14 @@ def run_fmcsi_init_comparison(data_dir):
     else:
         foopsi_fb = np.full(_N_CELLS, np.nan)
 
-    print(f'NNLS   — mean/cell: {np.mean(nnls_times):.2f}s  '
-          f'mean samples: {int(np.mean(nnls_nsamples))}  '
-          f'mean Fb: {np.nanmean(nnls_fb):.3f}')
-    print(f'FOOPSI — mean/cell: {np.mean(foopsi_times):.2f}s  '
-          f'mean samples: {int(np.mean(foopsi_nsamples))}  '
-          f'mean Fb: {np.nanmean(foopsi_fb):.3f}')
+    print('NNLS   — mean/cell: {:.2f}s  '
+          'mean samples: {}  '
+          'mean Fb: {:.3f}'.format(
+              np.mean(nnls_times), int(np.mean(nnls_nsamples)), np.nanmean(nnls_fb)))
+    print('FOOPSI — mean/cell: {:.2f}s  '
+          'mean samples: {}  '
+          'mean Fb: {:.3f}'.format(
+              np.mean(foopsi_times), int(np.mean(foopsi_nsamples)), np.nanmean(foopsi_fb)))
 
     np.savez(
         out_path,
@@ -566,15 +813,21 @@ def run_fmcsi_init_comparison(data_dir):
         n_frames         = np.array([dff.shape[1]]),
         fs               = np.array([_FS]),
     )
-    print(f'\nSaved -> {out_path}')
+    print('\nSaved to {}.'.format(out_path))
 
 
 def plot_fmcsi_init_comparison(data_dir):
+    """Plot example traces, timing histograms, and F_beta histograms from a saved fMCSI init comparison.
 
+    Parameters
+    ----------
+    data_dir : str
+        Directory containing the fmcsi_init_comparison.npz file.
+    """
     out_path = os.path.join(data_dir, 'fmcsi_init_comparison.npz')
     if not os.path.exists(out_path):
         raise FileNotFoundError(f'No data at {out_path}. Run --mode conv-test first.')
-    
+
     _FOOPSI_COLOR = 'tab:red'
 
     d = np.load(out_path, allow_pickle=True)
@@ -623,9 +876,11 @@ def plot_fmcsi_init_comparison(data_dir):
 
         gt_lo, gt_hi = gt.min(), gt.max()
         def _scale_gt(x):
+            """Scale ground-truth trace to [0, 1] using its own min/max."""
             return (x - gt_lo) / (gt_hi - gt_lo + 1e-12)
 
         def _scale_prob(x):
+            """Scale probability signal to [0, 1] by its maximum."""
             hi = np.max(x) if np.max(x) > 1e-12 else 1.0
             return x / hi
 
@@ -649,7 +904,7 @@ def plot_fmcsi_init_comparison(data_dir):
                 transform=ax.transAxes, fontsize=5.5, fontweight='bold',
                 va='top', ha='left', color='k')
         if row_idx == 0:
-            ax.legend(frameon=False, fontsize=6, loc='upper left')#,
+            ax.legend(frameon=False, fontsize=6, loc='upper left')
 
     ax_t = axd['time']
     bins = np.linspace(0, max(nnls_times.max(), foopsi_times.max()) * 1.05, 12)
@@ -670,9 +925,9 @@ def plot_fmcsi_init_comparison(data_dir):
     ax_f.hist(valid_n, bins=rbins, color=_NNLS_COLOR,   alpha=0.6,
               label='NNLS-initialized',   edgecolor='none')
 
-    print('average $F_\\beta$ (β=0.5) — NNLS init: {:.3f}  FOOPSI init: {:.3f}'.format(
+    print('Average $F_\\beta$ (β=0.5) — NNLS init: {:.3f}  FOOPSI init: {:.3f}'.format(
         np.nanmean(valid_n), np.nanmean(valid_f)))
-    print('average time per cell (sec) — NNLS init: {:.3f}  FOOPSI init: {:.3f}'.format(
+    print('Average time per cell (sec) — NNLS init: {:.3f}  FOOPSI init: {:.3f}'.format(
         np.mean(nnls_times), np.mean(foopsi_times)))
     ax_f.set_xlabel('$F_\\beta$')
     ax_f.set_ylabel('cells')
@@ -680,13 +935,20 @@ def plot_fmcsi_init_comparison(data_dir):
     ax_f.legend(frameon=False, fontsize=6, loc='upper left', reverse=True)
 
     for sfx in ('png', 'svg'):
-        out = os.path.join(data_dir, f'fmcsi_init_comparison.{sfx}')
+        out = os.path.join(data_dir, 'fmcsi_init_comparison.{}'.format(sfx))
         fig.savefig(out, dpi=300, bbox_inches='tight')
-        print(f'Saved -> {out}')
+        print('Saved to {}.'.format(out))
     plt.close(fig)
 
 
 def plot_combined_init(data_dir):
+    """Plot a combined figure merging raw init traces, timing, and fMCSI accuracy comparisons.
+
+    Parameters
+    ----------
+    data_dir : str
+        Directory containing init_comparison.npz and fmcsi_init_comparison.npz.
+    """
     init_path = os.path.join(data_dir, 'init_comparison.npz')
     conv_path = os.path.join(data_dir, 'fmcsi_init_comparison.npz')
     for p in (init_path, conv_path):
@@ -745,6 +1007,7 @@ def plot_combined_init(data_dir):
         gt_lo, gt_hi = gt.min(), gt.max()
         def _scale_gt(x): return (x - gt_lo) / (gt_hi - gt_lo + 1e-12)
         def _scale_sp(x):
+            """Scale spike signal to [0, 1] by its maximum."""
             hi = np.max(x) if np.max(x) > 1e-12 else 1.0
             return x / hi
 
@@ -769,22 +1032,12 @@ def plot_combined_init(data_dir):
             ax.legend(frameon=False, fontsize=6, loc='upper left')
 
     ax_ti = axd['time_init']
-    # bins_init = np.linspace(0, 200, 30)
-    # ax_ti.hist(foopsi_times_init * 1e3, bins=bins_init, color=_FOOPSI_COLOR,
-    #            alpha=0.6, label='FOOPSI', edgecolor='none')
-    # ax_ti.hist(nnls_times_init   * 1e3, bins=bins_init, color=_NNLS_COLOR,
-    #            alpha=0.6, label='NNLS',   edgecolor='none')
-    # ax_ti.set_xlabel('init time (msec)')
-    # ax_ti.set_ylabel('cells')
-    # ax_ti.set_xlim([0, 200])
-    # ax_ti.legend(frameon=False, fontsize=6, reverse=True, loc='upper right')
     ax_ti.scatter(
         foopsi_times_init * 1e3,
         nnls_times_init * 1e3,
         color='k',
         s=1
     )
-    # ax_ti.axis('equal')
     ax_ti.set_xlabel('FOOPSI init. time (msec)')
     ax_ti.set_ylabel('NNLS init. time (msec)')
     ax_ti.plot([0,175],[0,175], color='tab:cyan', alpha=0.5)
@@ -801,18 +1054,6 @@ def plot_combined_init(data_dir):
     ax_rc.set_yticks([0,25,50,75])
 
     ax_tc = axd['time_conv']
-    # parts_tc = ax_tc.violinplot(
-    #     [nnls_times_conv, foopsi_times_conv], positions=[1, 2],
-    #     showmedians=True, widths=0.65, showextrema=False
-    # )
-    # for pc, col in zip(parts_tc['bodies'], [_NNLS_COLOR, _FOOPSI_COLOR]):
-    #     pc.set_facecolor(col); pc.set_alpha(0.75)
-    # parts_tc['cmedians'].set_color('k'); parts_tc['cmedians'].set_linewidth(0.8)
-    # ax_tc.set_xticks([1, 2])
-    # ax_tc.set_xticklabels(['NNLS\ninit', 'FOOPSI\ninit'], fontsize=6)
-    # # ax_tc.set_xlabel('fMCSI time per cell (sec)')
-    # ax_tc.set_ylabel('time per cell (sec)')
-
     ax_tc.scatter(
         foopsi_times_conv,
         nnls_times_conv,
@@ -829,18 +1070,6 @@ def plot_combined_init(data_dir):
     ax_fb = axd['f1']
     valid_n = nnls_fb[np.isfinite(nnls_fb) & (nnls_fb > 0)]
     valid_f = foopsi_fb[np.isfinite(foopsi_fb) & (foopsi_fb > 0)]
-    # parts_fb = ax_fb.violinplot(
-    #     [valid_n, valid_f], positions=[1, 2],
-    #     showmedians=True, widths=0.65, showextrema=False
-    # )
-    # for pc, col in zip(parts_fb['bodies'], [_NNLS_COLOR, _FOOPSI_COLOR]):
-    #     pc.set_facecolor(col); pc.set_alpha(0.75)
-    # parts_fb['cmedians'].set_color('k'); parts_fb['cmedians'].set_linewidth(0.8)
-    # ax_fb.set_xticks([1, 2])
-    # ax_fb.set_xticklabels(['NNLS\ninit', 'FOOPSI\ninit'], fontsize=6)
-    # # ax_fb.set_xlabel('$F_\\beta$ (β=0.5)')
-    # ax_fb.set_ylabel('$F_\\beta$')
-    # ax_fb.set_ylim(0, 1.05)
 
     ax_fb.scatter(
         valid_f,
@@ -857,19 +1086,19 @@ def plot_combined_init(data_dir):
     ax_fb.set_xticks([0,0.25,0.5,0.75,1])
 
     for sfx in ('png', 'svg'):
-        out = os.path.join(data_dir, f'combined_init_comparison.{sfx}')
+        out = os.path.join(data_dir, 'combined_init_comparison.{}'.format(sfx))
         fig.savefig(out, dpi=300, bbox_inches='tight')
-        print(f'Saved -> {out}')
+        print('Saved to {}.'.format(out))
 
     plt.close(fig)
 
 
-_DEFAULT_CONV_TOL = 10 ** -1.5  # was 0.00067; weakened, see combined_opt sweep
-_DEFAULT_BURN_TOL = 1e-4        # was 0.005; moved into the burn-in trough
+_DEFAULT_CONV_TOL = 10 ** -1.5  # Was 0.00067; weakened, see combined_opt sweep.
+_DEFAULT_BURN_TOL = 1e-4        # Was 0.005; moved into burn-in trough.
 
-# min_sweeps=300 (the default) gates how soon the post-burn-in convergence
+# Min_sweeps=300 (the default) gates how soon the post-burn-in convergence
 # check can fire, which floors total sweep count regardless of how loose
-# conv_tol/burn_tol are set. lower it per-sweep so loosening the tolerance
+# conv_tol/burn_tol are set. Lower it per-sweep so loosening the tolerance
 # being tested can actually shorten the chain enough to reveal a quality drop.
 _CONV_TEST_MIN_SWEEPS = 50
 _BURN_TEST_MIN_SWEEPS = 50
@@ -884,31 +1113,51 @@ _TEST_B           = 5
 _TEST_WIN         = 5
 _TEST_CHECK_EVERY = 5
 
-# default generate_synthetic_data() population is too easy to show a sweep
+# Default generate_synthetic_data() population is too easy to show a sweep
 # effect (median SNR ~50, almost all cells far above the SNR=2.0 production
 # gate) -- a chain barely past burn-in already lands on the right answer
 # regardless of conv_tol/burn_tol. Override snr per-cell here, test-only, to
 # resemble a real post-filter population: most cells sit just above the gate,
 # with a shrinking tail of better-quality cells, rather than a flat box.
-_TEST_SNR_FLOOR = 2.0   # matches the production skip_snr gate
-_TEST_SNR_SCALE = 2.0   # exponential decay scale above the floor
-_TEST_SNR_MAX   = 20.0  # clip the rare long tail
+_TEST_SNR_FLOOR = 2.0   # Matches the production skip_snr gate.
+_TEST_SNR_SCALE = 2.0   # Exponential decay scale above the floor.
+_TEST_SNR_MAX   = 20.0  # Clips the rare long tail.
 
-# test-only cell count and session length for the conv_tol/burn_tol sweeps --
+# Test-only cell count and session length for the conv_tol/burn_tol sweeps --
 # 100 cells over 20 min (vs. the default _N_CELLS=200 / _DURATION=2400s used
 # elsewhere) matches a typical real recording length and keeps these sweeps
 # fast to re-run.
 _TEST_N_CELLS  = 100
 _TEST_DURATION = 1200.0
 
-# none of these sweeps override max_sweeps, so they all run against the
+# None of these sweeps override max_sweeps, so they all run against the
 # sampler's default cap -- used to draw a reference line on sweep-count
 # panels marking "ran out the clock" vs. genuine convergence.
 _MAX_SWEEPS_DEFAULT = 2000
 
 def _build_tol_grid(default_val, lower_mult, upper_mult, n_below=4, n_above=5):
-    # geomspace from default_val*lower_mult to default_val*upper_mult.
-    # multipliers are picked per-parameter from a direct measurement of
+    """Build a geometric grid of tolerance values spanning a specified multiplier range.
+
+    Parameters
+    ----------
+    default_val : float
+        Center value for the grid.
+    lower_mult : float
+        Multiplier applied to default_val for the lower bound.
+    upper_mult : float
+        Multiplier applied to default_val for the upper bound.
+    n_below : int, optional
+        Number of points below the default. Default is 4.
+    n_above : int, optional
+        Number of points above the default. Default is 5.
+
+    Returns
+    -------
+    list of float
+        Grid of n_below + n_above + 1 values.
+    """
+    # Geomspace from default_val*lower_mult to default_val*upper_mult.
+    # Multipliers are picked per-parameter from a direct measurement of
     # mean_sweeps vs. the tested value (see callers) -- outside that band
     # the chain just runs to max_sweeps regardless of the tolerance, so
     # testing there can never move F_beta.
@@ -917,9 +1166,32 @@ def _build_tol_grid(default_val, lower_mult, upper_mult, n_below=4, n_above=5):
 
 
 def _run_tol_sweep(dff, true_spikes, param_name, grid, fs, min_sweeps):
+    """Run fMCSI across a grid of tolerance values and collect accuracy/timing rows.
+
+    Parameters
+    ----------
+    dff : ndarray
+        Fluorescence data array, shape (n_cells, T).
+    true_spikes : list of ndarray
+        Ground-truth spike times per cell in seconds.
+    param_name : str
+        Name of the fMCSI parameter to sweep (e.g. 'conv_tol').
+    grid : list of float
+        Values to test for param_name.
+    fs : float
+        Sampling rate in Hz.
+    min_sweeps : int
+        Minimum sweep count passed to fMCSI.
+
+    Returns
+    -------
+    list of dict
+        One dict per grid point with val, mean_time, std_time, mean_nsweeps,
+        std_nsweeps, mean_f1, and std_f1 fields.
+    """
     rows = []
     for val in grid:
-        print(f'\n  {param_name}={val:.2e} ...')
+        print('\n  {}={:.2e} ...'.format(param_name, val))
         params = {
             'f': fs, 'p': 2, 'auto_stop': True, 'upd_gam': 0,
             'min_sweeps': min_sweeps,
@@ -946,15 +1218,28 @@ def _run_tol_sweep(dff, true_spikes, param_name, grid, fs, min_sweeps):
                 'mean_f1':      float(np.mean(fb)),
                 'std_f1':       float(np.std(fb, ddof=1)),
             })
-            print(f'    mean_cell={np.mean(per_cell_t):.3f}s  '
-                  f'mean_sweeps={np.mean(nsweeps):.1f}  '
-                  f'F_beta={np.mean(fb):.3f}  CosMIC={np.mean(cosmic):.3f}')
+            print('    Mean_cell={:.3f}s  '
+                  'mean_sweeps={:.1f}  '
+                  'F_beta={:.3f}  CosMIC={:.3f}'.format(
+                      np.mean(per_cell_t), np.mean(nsweeps),
+                      np.mean(fb), np.mean(cosmic)))
         except Exception as exc:
-            print(f'    FAILED: {exc}')
+            print('    FAILED: {}'.format(exc))
     return rows
 
 
 def _save_tol_sweep(out_path, rows, default_val):
+    """Save tolerance sweep result rows to a .npz file.
+
+    Parameters
+    ----------
+    out_path : str
+        Output file path.
+    rows : list of dict
+        Result rows from _run_tol_sweep.
+    default_val : float
+        Default parameter value to store as a reference.
+    """
     np.savez(
         out_path,
         tol          = np.array([r['val']          for r in rows]),
@@ -966,27 +1251,37 @@ def _save_tol_sweep(out_path, rows, default_val):
         std_f1       = np.array([r['std_f1']        for r in rows]),
         default_val  = np.array([default_val]),
     )
-    print(f'\nSaved -> {out_path}')
+    print('\nSaved to {}.'.format(out_path))
 
 
 def run_conv_tol_sweep(data_dir):
+    """Run a convergence tolerance sweep on a synthetic low-SNR population and save results.
+
+    Parameters
+    ----------
+    data_dir : str
+        Directory where the output .npz file is written.
+    """
     os.makedirs(data_dir, exist_ok=True)
     out_path = os.path.join(data_dir, 'conv_tol_sweep.npz')
 
-    print(f'Generating synthetic population '
-          f'(n={_TEST_N_CELLS}, T={_TEST_DURATION}s, fs={_FS}Hz, tau={_TAU}s, '
-          f'snr~floor={_TEST_SNR_FLOOR}+exp({_TEST_SNR_SCALE}))...')
+    print('Generating synthetic population '
+          '(n={}, T={}s, fs={}Hz, tau={}s, '
+          'snr~floor={}+exp({}))...'.format(
+              _TEST_N_CELLS, _TEST_DURATION, _FS, _TAU,
+              _TEST_SNR_FLOOR, _TEST_SNR_SCALE))
     snr = np.clip(_TEST_SNR_FLOOR + np.random.exponential(_TEST_SNR_SCALE, size=_TEST_N_CELLS),
                   _TEST_SNR_FLOOR, _TEST_SNR_MAX)
     dff, true_spikes, _, _, _, _ = generate_synthetic_data(
         n_cells=_TEST_N_CELLS, fs=_FS, duration=_TEST_DURATION, tau=_TAU, snr=snr)
 
-    # measured mean_sweeps vs. conv_tol on this population: pinned at
+    # Measured mean_sweeps vs. conv_tol on this population: pinned at
     # max_sweeps=2000 for everything from default_val/1000 up through
     # ~default_val*10; the real decline runs from default_val itself out to
     # default_val*1000. Range narrowed to where the curve actually moves.
     grid = _build_tol_grid(_DEFAULT_CONV_TOL, lower_mult=1.0, upper_mult=1000.0)
-    print(f'  Sweep ({len(grid)} conv_tol values): {[f"{v:.2e}" for v in grid]}')
+    print('  Sweep ({} conv_tol values): {}'.format(
+        len(grid), ['{:.2e}'.format(v) for v in grid]))
 
     rows = _run_tol_sweep(dff, true_spikes, 'conv_tol', grid, _FS, _CONV_TEST_MIN_SWEEPS)
     if rows:
@@ -996,24 +1291,34 @@ def run_conv_tol_sweep(data_dir):
 
 
 def run_burn_tol_sweep(data_dir):
+    """Run a burn-in tolerance sweep on a synthetic low-SNR population and save results.
+
+    Parameters
+    ----------
+    data_dir : str
+        Directory where the output .npz file is written.
+    """
     os.makedirs(data_dir, exist_ok=True)
     out_path = os.path.join(data_dir, 'burn_tol_sweep.npz')
 
-    print(f'Generating synthetic population '
-          f'(n={_TEST_N_CELLS}, T={_TEST_DURATION}s, fs={_FS}Hz, tau={_TAU}s, '
-          f'snr~floor={_TEST_SNR_FLOOR}+exp({_TEST_SNR_SCALE}))...')
+    print('Generating synthetic population '
+          '(n={}, T={}s, fs={}Hz, tau={}s, '
+          'snr~floor={}+exp({}))...'.format(
+              _TEST_N_CELLS, _TEST_DURATION, _FS, _TAU,
+              _TEST_SNR_FLOOR, _TEST_SNR_SCALE))
     snr = np.clip(_TEST_SNR_FLOOR + np.random.exponential(_TEST_SNR_SCALE, size=_TEST_N_CELLS),
                   _TEST_SNR_FLOOR, _TEST_SNR_MAX)
     dff, true_spikes, _, _, _, _ = generate_synthetic_data(
         n_cells=_TEST_N_CELLS, fs=_FS, duration=_TEST_DURATION, tau=_TAU, snr=snr)
 
-    # measured mean_sweeps vs. burn_tol on this population: pinned at
+    # Measured mean_sweeps vs. burn_tol on this population: pinned at
     # max_sweeps=2000 below ~default_val/500 (burn-in itself never
     # completes) and above ~default_val*4 (burn-in completes too early,
     # leaving real pre-convergence drift that conv_tol then never
     # satisfies). The non-flat region sits between those two ends.
     grid = _build_tol_grid(_DEFAULT_BURN_TOL, lower_mult=0.002, upper_mult=4.0)
-    print(f'  Sweep ({len(grid)} burn_tol values): {[f"{v:.2e}" for v in grid]}')
+    print('  Sweep ({} burn_tol values): {}'.format(
+        len(grid), ['{:.2e}'.format(v) for v in grid]))
 
     rows = _run_tol_sweep(dff, true_spikes, 'burn_tol', grid, _FS, _BURN_TEST_MIN_SWEEPS)
     if rows:
@@ -1023,6 +1328,19 @@ def run_burn_tol_sweep(data_dir):
 
 
 def _plot_tol_sweep(data_dir, npz_name, xlabel, fig_stem):
+    """Load a tolerance sweep .npz file and plot time-per-cell and F_beta vs. tolerance.
+
+    Parameters
+    ----------
+    data_dir : str
+        Directory containing the .npz file.
+    npz_name : str
+        Filename of the .npz to load.
+    xlabel : str
+        X-axis label for the plots.
+    fig_stem : str
+        Stem for the output figure filenames.
+    """
     out_path = os.path.join(data_dir, npz_name)
     if not os.path.exists(out_path):
         raise FileNotFoundError(f'No data at {out_path}.')
@@ -1054,24 +1372,45 @@ def _plot_tol_sweep(data_dir, npz_name, xlabel, fig_stem):
     axes[1].set_ylim(0, 0.51)
     fig.tight_layout()
     for sfx in ('png', 'svg'):
-        out = os.path.join(data_dir, f'{fig_stem}.{sfx}')
+        out = os.path.join(data_dir, '{}.{}'.format(fig_stem, sfx))
         fig.savefig(out, dpi=300, bbox_inches='tight')
-        print(f'Saved -> {out}')
+        print('Saved to {}.'.format(out))
     plt.close(fig)
 
 
 def plot_conv_tol_sweep(data_dir):
+    """Plot the saved convergence tolerance sweep results.
+
+    Parameters
+    ----------
+    data_dir : str
+        Directory containing the conv_tol_sweep.npz file.
+    """
     _plot_tol_sweep(data_dir, 'conv_tol_sweep.npz',
                     'convergence threshold', 'conv_tol_sweep')
 
 
 def plot_burn_tol_sweep(data_dir):
+    """Plot the saved burn-in tolerance sweep results.
+
+    Parameters
+    ----------
+    data_dir : str
+        Directory containing the burn_tol_sweep.npz file.
+    """
     _plot_tol_sweep(data_dir, 'burn_tol_sweep.npz',
                     'burn-in completion threshold', 'burn_tol_sweep')
 
 
 def plot_combined_opt(data_dir):
+    """Plot a 4x3 combined figure of all optimization parameter sweeps.
 
+    Parameters
+    ----------
+    data_dir : str
+        Directory containing T_supp_sweep.npz, conv_tol_sweep.npz,
+        burn_tol_sweep.npz, and snr_threshold_sweep.npz.
+    """
     t_supp_path   = os.path.join(data_dir, 'T_supp_sweep.npz')
     conv_tol_path = os.path.join(data_dir, 'conv_tol_sweep.npz')
     burn_tol_path = os.path.join(data_dir, 'burn_tol_sweep.npz')
@@ -1083,6 +1422,7 @@ def plot_combined_opt(data_dir):
     fig, axes = plt.subplots(4, 3, figsize=(7.2, 9.0), dpi=300)
 
     def _sweeps_panel(ax, x, mns, sns, xlabel):
+        """Plot mean sweep count with std shading on ax."""
         ax.fill_between(x, mns - sns, mns + sns,
                         color=_COLOR, alpha=0.25, linewidth=0)
         ax.plot(x, mns, '.-', color=_COLOR, zorder=3)
@@ -1137,7 +1477,7 @@ def plot_combined_opt(data_dir):
     sf1         = d['std_f1']
     mns         = d['mean_nsweeps']
     sns         = d['std_nsweeps']
-    default_val = _DEFAULT_CONV_TOL  # updated default; npz still reflects the old value
+    default_val = _DEFAULT_CONV_TOL  # Updated default; npz still reflects old value.
 
     for ax, y, yerr, ylabel in [
         (axes[1, 0], mt,  st,  'time per cell (sec)'),
@@ -1168,7 +1508,7 @@ def plot_combined_opt(data_dir):
     sf1         = d['std_f1']
     mns         = d['mean_nsweeps']
     sns         = d['std_nsweeps']
-    default_val = _DEFAULT_BURN_TOL  # updated default; npz still reflects the old value
+    default_val = _DEFAULT_BURN_TOL  # Updated default; npz still reflects old value.
 
     for ax, y, yerr, ylabel in [
         (axes[2, 0], mt,  st,  'time per cell (sec)'),
@@ -1233,13 +1573,25 @@ def plot_combined_opt(data_dir):
 
     fig.tight_layout()
     for sfx in ('png', 'svg'):
-        out = os.path.join(data_dir, f'combined_opt.{sfx}')
+        out = os.path.join(data_dir, 'combined_opt.{}'.format(sfx))
         fig.savefig(out, dpi=300, bbox_inches='tight')
-        print(f'Saved -> {out}')
+        print('Saved to {}.'.format(out))
     plt.close(fig)
 
 
 def _dff_snr(fluo):
+    """Estimate the signal-to-noise ratio of a dF/F trace.
+
+    Parameters
+    ----------
+    fluo : array_like
+        Fluorescence trace.
+
+    Returns
+    -------
+    float
+        SNR estimated as (99th percentile - 8th percentile) / MAD-based noise.
+    """
     f      = np.asarray(fluo, dtype=np.float64)
     sn_mad = float(np.median(np.abs(np.diff(f)))) / 0.6745 if len(f) > 1 else 1e-4
     peak   = float(np.percentile(f, 99))
@@ -1248,12 +1600,19 @@ def _dff_snr(fluo):
 
 
 def run_snr_filter_sweep(data_dir):
+    """Run fMCSI without SNR pre-filtering and save per-cell accuracy vs. SNR.
 
+    Parameters
+    ----------
+    data_dir : str
+        Directory where the output .npz file is written.
+    """
     os.makedirs(data_dir, exist_ok=True)
     out_path = os.path.join(data_dir, 'snr_filter_sweep.npz')
 
-    print(f'Generating synthetic population '
-          f'(n={_N_CELLS}, T={_DURATION}s, fs={_FS}Hz, tau={_TAU}s)...')
+    print('Generating synthetic population '
+          '(n={}, T={}s, fs={}Hz, tau={}s)...'.format(
+              _N_CELLS, _DURATION, _FS, _TAU))
     dff, true_spikes, _, _, _, _ = generate_synthetic_data(
         n_cells=_N_CELLS, fs=_FS, duration=_DURATION, tau=_TAU
     )
@@ -1270,7 +1629,7 @@ def run_snr_filter_sweep(data_dir):
         'skip_snr':  True,
     }
 
-    print(f'Running OMSI on {_N_CELLS} synthetic cells (no SNR pre-filter)...')
+    print('Running OMSI on {} synthetic cells (no SNR pre-filter)...'.format(_N_CELLS))
     res = OMSI.deconv(dff, params=params, benchmark=True)
     pred = res['optim_spikes']
 
@@ -1286,10 +1645,17 @@ def run_snr_filter_sweep(data_dir):
         cosmic    = cosmic,
         threshold = np.array([_SNR_THRESHOLD]),
     )
-    print(f'\nSaved {_N_CELLS} cells -> {out_path}')
+    print('\nSaved {} cells to {}.'.format(_N_CELLS, out_path))
 
 
 def plot_snr_filter_sweep(data_dir):
+    """Plot per-cell F_beta and CosMIC vs. SNR from a saved SNR filter sweep.
+
+    Parameters
+    ----------
+    data_dir : str
+        Directory containing the snr_filter_sweep.npz file.
+    """
     out_path = os.path.join(data_dir, 'snr_filter_sweep.npz')
     if not os.path.exists(out_path):
         raise FileNotFoundError(f'No data at {out_path}. Run --mode snr-filter-test first.')
@@ -1335,7 +1701,7 @@ def plot_snr_filter_sweep(data_dir):
     x = bin_centers[valid]
 
     fig, axes = plt.subplots(1, 2, figsize=(4.8, 2.25), dpi=300)
-    fig.suptitle(f'{n_below_thresh} cells below SNR threshold (with spikes)',
+    fig.suptitle('{} cells below SNR threshold (with spikes)'.format(n_below_thresh),
                  fontsize=6, y=1.02)
     for ax, mean, std, ylabel in [
         (axes[0], f1_mean[valid],  f1_std[valid],  '$F_\\beta$'),
@@ -1355,9 +1721,9 @@ def plot_snr_filter_sweep(data_dir):
 
     fig.tight_layout()
     for sfx in ('png', 'svg'):
-        out = os.path.join(data_dir, f'snr_filter_sweep.{sfx}')
+        out = os.path.join(data_dir, 'snr_filter_sweep.{}'.format(sfx))
         fig.savefig(out, dpi=300, bbox_inches='tight')
-        print(f'Saved -> {out}')
+        print('Saved to {}.'.format(out))
     plt.close(fig)
 
 
@@ -1368,14 +1734,21 @@ _SNR_N_LEVELS       = 18
 
 
 def run_snr_threshold_sweep(data_dir):
+    """Run fMCSI across a range of fixed SNR levels and save accuracy results.
 
+    Parameters
+    ----------
+    data_dir : str
+        Directory where the output .npz file is written.
+    """
     os.makedirs(data_dir, exist_ok=True)
     out_path = os.path.join(data_dir, 'snr_threshold_sweep.npz')
 
     snr_levels = np.geomspace(0.3, 3.0 * _SNR_THRESHOLD, _SNR_N_LEVELS)
-    print(f'SNR sweep: {_SNR_N_LEVELS} levels from {snr_levels[0]:.2f} to '
-          f'{snr_levels[-1]:.2f}  (threshold={_SNR_THRESHOLD})')
-    print(f'  {_SNR_N_CELLS} cells x {_SNR_DURATION}s each')
+    print('SNR sweep: {} levels from {:.2f} to {:.2f}  '
+          '(threshold={})'.format(
+              _SNR_N_LEVELS, snr_levels[0], snr_levels[-1], _SNR_THRESHOLD))
+    print('  {} cells x {}s each'.format(_SNR_N_CELLS, _SNR_DURATION))
 
     mean_fb      = np.full(_SNR_N_LEVELS, np.nan)
     std_fb       = np.full(_SNR_N_LEVELS, np.nan)
@@ -1394,7 +1767,7 @@ def run_snr_threshold_sweep(data_dir):
     }
 
     for k, snr_val in enumerate(snr_levels):
-        print(f'\n  [{k+1}/{_SNR_N_LEVELS}] SNR={snr_val:.3f} ...')
+        print('\n  [{}/{}] SNR={:.3f} ...'.format(k + 1, _SNR_N_LEVELS, snr_val))
         dff, true_spikes, _, _, _, _ = generate_synthetic_data(
             n_cells=_SNR_N_CELLS, fs=_FS, duration=_SNR_DURATION,
             tau=_TAU, snr=float(snr_val),
@@ -1419,10 +1792,11 @@ def run_snr_threshold_sweep(data_dir):
                 mean_fb[k] = float(np.nanmean(fb_arr))
                 std_fb[k]  = float(np.nanstd(fb_arr))
 
-            print(f'    F_beta={mean_fb[k]:.3f}  CosMIC={mean_cosmic[k]:.3f}  '
-                  f'mean_sweeps={mean_nsweeps[k]:.1f}')
+            print('    F_beta={:.3f}  CosMIC={:.3f}  '
+                  'mean_sweeps={:.1f}'.format(
+                      mean_fb[k], mean_cosmic[k], mean_nsweeps[k]))
         except Exception as exc:
-            print(f'    FAILED: {exc}')
+            print('    FAILED: {}'.format(exc))
 
     np.savez(
         out_path,
@@ -1435,10 +1809,17 @@ def run_snr_threshold_sweep(data_dir):
         std_nsweeps  = std_nsweeps,
         threshold    = np.array([_SNR_THRESHOLD]),
     )
-    print(f'\nSaved -> {out_path}')
+    print('\nSaved to {}.'.format(out_path))
 
 
 def plot_snr_threshold_sweep(data_dir):
+    """Plot F_beta and CosMIC vs. SNR level from a saved SNR threshold sweep.
+
+    Parameters
+    ----------
+    data_dir : str
+        Directory containing the snr_threshold_sweep.npz file.
+    """
     out_path = os.path.join(data_dir, 'snr_threshold_sweep.npz')
     if not os.path.exists(out_path):
         raise FileNotFoundError(
@@ -1465,7 +1846,7 @@ def plot_snr_threshold_sweep(data_dir):
                         color=_COLOR, alpha=0.25, linewidth=0)
         ax.plot(x, y, '.-', color=_COLOR, zorder=3)
         ax.axvline(threshold, color='k', linestyle='--',
-                   linewidth=0.8, alpha=0.6, label=f'threshold={threshold}')
+                   linewidth=0.8, alpha=0.6, label='threshold={}'.format(threshold))
         ax.set_xlabel('SNR')
         ax.set_ylabel(ylabel)
         ax.set_xlim(left=0)
@@ -1473,9 +1854,9 @@ def plot_snr_threshold_sweep(data_dir):
 
     fig.tight_layout()
     for sfx in ('png', 'svg'):
-        out = os.path.join(data_dir, f'snr_threshold_sweep.{sfx}')
+        out = os.path.join(data_dir, 'snr_threshold_sweep.{}'.format(sfx))
         fig.savefig(out, dpi=300, bbox_inches='tight')
-        print(f'Saved -> {out}')
+        print('Saved to {}.'.format(out))
     plt.close(fig)
 
 
@@ -1487,6 +1868,18 @@ _SNR_EXCLUDED = {'Other', 'Cal520'}
 
 
 def _snr_get_sensor(ds_name):
+    """Map a dataset name to a canonical calcium sensor label.
+
+    Parameters
+    ----------
+    ds_name : str
+        Dataset filename or identifier string.
+
+    Returns
+    -------
+    str
+        Sensor label (e.g. 'GCaMP6f', 'OGB1') or 'Other' if unrecognized.
+    """
     s = ds_name.lower()
     for keyword, label in [
         ('gcaMP8s', 'GCaMP8s'), ('gcaMP8m', 'GCaMP8m'), ('gcaMP8f', 'GCaMP8f'),
@@ -1501,10 +1894,16 @@ def _snr_get_sensor(ds_name):
 
 
 def print_snr_stats(fig4_data_dir):
+    """Print a table of SNR statistics by sensor for the figure4 ground-truth datasets.
 
+    Parameters
+    ----------
+    fig4_data_dir : str
+        Root directory containing the ground_truth_traces_fmcsi/ subdirectory.
+    """
     traces_dir = os.path.join(fig4_data_dir, 'ground_truth_traces_fmcsi')
     if not os.path.isdir(traces_dir):
-        print(f'Traces directory not found: {traces_dir}')
+        print('Traces directory not found: {}'.format(traces_dir))
         return
 
     snr_by_sensor = {}
@@ -1519,10 +1918,10 @@ def print_snr_stats(fig4_data_dir):
             npz     = np.load(os.path.join(traces_dir, fname), allow_pickle=False)
             n_cells = int(npz['n_cells'])
         except Exception as exc:
-            print(f'  Warning: {fname}: {exc}')
+            print('  Warning: {}: {}'.format(fname, exc))
             continue
         for i in range(n_cells):
-            trace = npz[f'dff_{i}'].astype(np.float64)
+            trace = npz['dff_{}'.format(i)].astype(np.float64)
             noise = _get_sn(trace, [0.25, 0.5])
             b     = float(np.percentile(trace, 8))
             peak  = float(np.percentile(trace, 99))
@@ -1530,13 +1929,14 @@ def print_snr_stats(fig4_data_dir):
             snr_by_sensor.setdefault(sensor, []).append(snr)
 
     print('SNR statistics by sensor (figure4 datasets):')
-    print(f'  {"Sensor":<12}  {"n":>5}  {"mean SNR":>10}  {"std SNR":>10}')
-    print(f'  {"-"*12}  {"-"*5}  {"-"*10}  {"-"*10}')
+    print('  {:<12}  {:>5}  {:>10}  {:>10}'.format('Sensor', 'n', 'mean SNR', 'std SNR'))
+    print('  {}  {}  {}  {}'.format('-' * 12, '-' * 5, '-' * 10, '-' * 10))
     for sensor in _SNR_SENSOR_ORDER:
         if sensor not in snr_by_sensor:
             continue
         vals = np.array(snr_by_sensor[sensor])
-        print(f'  {sensor:<12}  {len(vals):>5}  {np.mean(vals):>10.2f}  {np.std(vals):>10.2f}')
+        print('  {:<12}  {:>5}  {:>10.2f}  {:>10.2f}'.format(
+            sensor, len(vals), np.mean(vals), np.std(vals)))
 
 
 if __name__ == '__main__':
@@ -1609,4 +2009,3 @@ if __name__ == '__main__':
         plot_snr_threshold_sweep(args.data_dir)
     elif args.mode == 'snr-stats':
         print_snr_stats(args.fig4_data_dir)
-

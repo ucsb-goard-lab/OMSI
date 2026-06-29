@@ -1,6 +1,33 @@
 # -*- coding: utf-8 -*-
 """
-Fixed Benchmark on Simulated Data
+figures/figure1.py
+
+Fixed benchmark on simulated data.
+
+Functions
+---------
+_oasis_spikes_from_s
+    Convert OASIS deconvolved signal to spike times.
+_run_cascade_inference
+    Run CASCADE spike inference via subprocess.
+_fbeta
+    Compute F-beta score from precision and recall arrays.
+run_test
+    Run all inference methods on simulated data.
+_best_window_sim
+    Find the best window for visualizing a simulated trace.
+_select_example_cells
+    Select example cells spanning a range of kurtosis values.
+_plot_raster
+    Draw spike rasters and raw traces for example cells.
+_with_window_metrics
+    Return results dict augmented with window-based accuracy metrics.
+plot_figure
+    Load results and render the figure.
+plot_running_median
+    Overlay a running-median curve with SEM band on an axes.
+print_stats
+    Print summary statistics to the terminal.
 
 To run inference:
     $ python figure1.py --mode test --data-dir /path/to/results
@@ -8,7 +35,7 @@ To run inference:
 To create figure:
     $ python figure1.py --mode plot --data-dir /path/to/results
 
-Written DMM, March 2026
+DMM, March 2026
 """
 
 import argparse
@@ -42,7 +69,7 @@ DURATION = 60 * 20
 TAU      = 1.2
 N_CELLS  = 500
 BETA     = 0.5
-USE_STRICT_ACCURACY = False  # Hungarian one-to-one matching (compute_accuracy_strict)
+USE_STRICT_ACCURACY = False  # Hungarian one-to-one matching (compute_accuracy_strict).
 
 COLORS = {
     'fMCSI':      '#4C72B0',
@@ -60,12 +87,30 @@ _NPZ_NAMES = {
     'CASCADE_CPU': 'fixed_benchmark_CASCADE_CPU.npz',
 }
 
-#   'threshold' : return every frame where s > height * sigma (default)
-#   'peaks'     : find local maxima above height * sigma with minimum inter-peak distance
+#   'threshold' : return every frame where s > height * sigma (default).
+#   'peaks'     : find local maxima above height * sigma with minimum inter-peak distance.
 OASIS_SPIKE_DETECTION = 'peaks'
 
 
 def _oasis_spikes_from_s(s, sigma, fs, height=1.0):
+    """ Convert OASIS deconvolved signal to spike times.
+
+    Parameters
+    ----------
+    s : np.ndarray
+        Deconvolved signal trace.
+    sigma : float
+        Noise standard deviation.
+    fs : float
+        Sampling rate in Hz.
+    height : float, optional
+        Threshold multiplier (default 1.0).
+
+    Returns
+    -------
+    np.ndarray
+        Spike times in seconds.
+    """
     thresh = height * sigma
     if OASIS_SPIKE_DETECTION == 'peaks':
         min_dist = max(1, int(0.05 * fs))
@@ -75,7 +120,32 @@ def _oasis_spikes_from_s(s, sigma, fs, height=1.0):
 
 
 def _run_cascade_inference(dff, fs, n_cells, data_dir, prefix='fig1_cascade', device='gpu'):
+    """ Run CASCADE spike inference via subprocess.
 
+    Parameters
+    ----------
+    dff : np.ndarray
+        dF/F traces, shape (n_cells, n_frames).
+    fs : float
+        Sampling rate in Hz.
+    n_cells : int
+        Number of cells.
+    data_dir : str
+        Directory for temporary input/output files.
+    prefix : str, optional
+        Filename prefix for temporary files.
+    device : str, optional
+        Compute device, 'gpu' or 'cpu'.
+
+    Returns
+    -------
+    cascade_probs : np.ndarray
+        Per-frame spike probabilities.
+    cascade_spikes : list of np.ndarray
+        Spike times in seconds for each cell.
+    cascade_time : float
+        Wall-clock inference time in seconds.
+    """
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           'run_cascade_subprocess.py')
     input_path  = os.path.join(data_dir, f'{prefix}_input.npz')
@@ -83,7 +153,7 @@ def _run_cascade_inference(dff, fs, n_cells, data_dir, prefix='fig1_cascade', de
 
     np.savez(input_path, dff=dff.astype(np.float32), fs=np.float32(fs))
 
-    print(f"Calling CASCADE subprocess (n_cells={n_cells}, fs={fs}, device={device})...")
+    print('Calling CASCADE subprocess (n_cells={}, fs={}, device={})...'.format(n_cells, fs, device))
     subprocess.run(
         ['conda', 'run', '-n', 'cascade', 'python', script,
          '--mode', 'inference',
@@ -101,7 +171,20 @@ def _run_cascade_inference(dff, fs, n_cells, data_dir, prefix='fig1_cascade', de
 
 
 def _fbeta(precision, recall):
+    """ Compute the F-beta score from precision and recall arrays.
 
+    Parameters
+    ----------
+    precision : array-like
+        Precision values.
+    recall : array-like
+        Recall values.
+
+    Returns
+    -------
+    np.ndarray
+        F-beta scores.
+    """
     p  = np.asarray(precision, dtype=float)
     r  = np.asarray(recall,    dtype=float)
     b2 = BETA ** 2
@@ -112,7 +195,21 @@ def _fbeta(precision, recall):
 
 def run_test(data_dir=_DEFAULT_DATA_DIR, run_fmcsi=True, run_matlab=True,
              run_oasis=True, run_cascade=True):
+    """ Run spike inference for all methods on simulated data.
 
+    Parameters
+    ----------
+    data_dir : str, optional
+        Directory for reading/writing result files.
+    run_fmcsi : bool, optional
+        Whether to run fMCSI inference.
+    run_matlab : bool, optional
+        Whether to run MATLAB/CaImAn inference.
+    run_oasis : bool, optional
+        Whether to run OASIS inference.
+    run_cascade : bool, optional
+        Whether to run CASCADE inference.
+    """
     os.makedirs(data_dir, exist_ok=True)
 
     print('Generating synthetic spikes and calcium traces...')
@@ -150,9 +247,8 @@ def run_test(data_dir=_DEFAULT_DATA_DIR, run_fmcsi=True, run_matlab=True,
         t0 = time.time()
         optim_dict = OMSI.deconv(noisy, params, true_spikes=true_spikes, benchmark=True)
         optim_time = time.time() - t0
-        print(f'  fMCSI took {optim_time:.1f}s ({optim_time/N_CELLS:.3f}s/cell)')
-        print(f'  P={np.nanmean(optim_dict["optim_precision"]):.3f}  '
-              f'R={np.nanmean(optim_dict["optim_recall"]):.3f}')
+        print('  fMCSI took {:.1f}s ({:.3f}s/cell)'.format(optim_time, optim_time/N_CELLS))
+        print('  P={:.3f}  R={:.3f}'.format(np.nanmean(optim_dict["optim_precision"]), np.nanmean(optim_dict["optim_recall"])))
         save = {**shared, **optim_dict, 'optim_time': optim_time}
         np.savez(os.path.join(data_dir, _NPZ_NAMES['fMCSI']), **save)
 
@@ -165,8 +261,7 @@ def run_test(data_dir=_DEFAULT_DATA_DIR, run_fmcsi=True, run_matlab=True,
         )
         matlab_time = time.time() - t0
         trad_prec, trad_rec, trad_F1 = OMSI.compute_accuracy_strict(true_spikes, trad_spikes)
-        print(f'  MATLAB took {matlab_time:.1f}s  P={np.nanmean(trad_prec):.3f}  '
-              f'R={np.nanmean(trad_rec):.3f}')
+        print('  MATLAB took {:.1f}s  P={:.3f}  R={:.3f}'.format(matlab_time, np.nanmean(trad_prec), np.nanmean(trad_rec)))
         save = {
             **shared,
             'tradmat_spikes':    np.array(trad_spikes, dtype=object),
@@ -193,8 +288,7 @@ def run_test(data_dir=_DEFAULT_DATA_DIR, run_fmcsi=True, run_matlab=True,
             oasis_spikes.append(_oasis_spikes_from_s(s, sigmas[i], FS))
         oasis_time = time.time() - t0
         oasis_prec, oasis_rec, oasis_F1 = OMSI.compute_accuracy_strict(true_spikes, oasis_spikes)
-        print(f'  OASIS took {oasis_time:.1f}s  P={np.nanmean(oasis_prec):.3f}  '
-              f'R={np.nanmean(oasis_rec):.3f}')
+        print('  OASIS took {:.1f}s  P={:.3f}  R={:.3f}'.format(oasis_time, np.nanmean(oasis_prec), np.nanmean(oasis_rec)))
         save = {
             **shared,
             'oasis_spikes':    np.array(oasis_spikes, dtype=object),
@@ -208,14 +302,13 @@ def run_test(data_dir=_DEFAULT_DATA_DIR, run_fmcsi=True, run_matlab=True,
     if run_cascade:
 
         for _dev, _key in [('gpu', 'CASCADE_GPU'), ('cpu', 'CASCADE_CPU')]:
-            print(f'\nRunning CASCADE (subprocess, {_dev.upper()})...')
+            print('\nRunning CASCADE (subprocess, {})...'.format(_dev.upper()))
             _probs, _spikes, _time = _run_cascade_inference(
                 noisy, FS, N_CELLS, data_dir,
                 prefix=f'fig1_cascade_{_dev}', device=_dev
             )
             _prec, _rec, _F1 = OMSI.compute_accuracy_strict(true_spikes, _spikes)
-            print(f'  CASCADE ({_dev.upper()}) took {_time:.1f}s  '
-                  f'P={np.nanmean(_prec):.3f}  R={np.nanmean(_rec):.3f}')
+            print('  CASCADE ({}) took {:.1f}s  P={:.3f}  R={:.3f}'.format(_dev.upper(), _time, np.nanmean(_prec), np.nanmean(_rec)))
             np.savez(os.path.join(data_dir, _NPZ_NAMES[_key]), **{
                 **shared,
                 'cascade_spikes':    np.array(_spikes, dtype=object),
@@ -230,6 +323,28 @@ def run_test(data_dir=_DEFAULT_DATA_DIR, run_fmcsi=True, run_matlab=True,
 
 
 def _best_window_sim(raw_trace, fs, true_spk, det_list, window=60.0, target_spikes=20):
+    """ Find the best non-overlapping window for visualizing a simulated trace.
+
+    Parameters
+    ----------
+    raw_trace : np.ndarray
+        Raw dF/F trace.
+    fs : float
+        Sampling rate in Hz.
+    true_spk : np.ndarray
+        Ground-truth spike times in seconds.
+    det_list : list of np.ndarray
+        Detected spike times from each method.
+    window : float, optional
+        Window duration in seconds.
+    target_spikes : int, optional
+        Target number of ground-truth spikes in the window.
+
+    Returns
+    -------
+    float
+        Start time of the best window in seconds.
+    """
     block_frames = int(window * fs)
     n_frames = len(raw_trace)
     best_t0, best_score = 0.0, -np.inf
@@ -259,6 +374,32 @@ def _best_window_sim(raw_trace, fs, true_spk, det_list, window=60.0, target_spik
 def _select_example_cells(mine_res, oasis_res, cascade_res, matlab_res,
                            n_cells=4, window=60.0, min_spikes=10,
                            target_kurts=(0.2, 0.5, 1.0, 2.0)):
+    """ Select example cells spanning a range of kurtosis values.
+
+    Parameters
+    ----------
+    mine_res : np.lib.npyio.NpzFile
+        fMCSI results.
+    oasis_res : np.lib.npyio.NpzFile
+        OASIS results.
+    cascade_res : np.lib.npyio.NpzFile
+        CASCADE results.
+    matlab_res : np.lib.npyio.NpzFile
+        MATLAB results.
+    n_cells : int, optional
+        Number of cells to select.
+    window : float, optional
+        Visualization window in seconds.
+    min_spikes : int, optional
+        Minimum ground-truth spikes required in the window.
+    target_kurts : tuple, optional
+        Target kurtosis values for cell selection.
+
+    Returns
+    -------
+    list of dict
+        Selected cells with trace and spike data.
+    """
     fs              = float(mine_res['f'])
     true_spikes_arr = list(mine_res['true_spikes'])
     noisy_traces    = mine_res['noisy_traces']
@@ -327,6 +468,17 @@ def _select_example_cells(mine_res, oasis_res, cascade_res, matlab_res,
 
 
 def _plot_raster(ax, cells, window=60.0):
+    """ Draw spike rasters and raw traces for a list of example cells.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Axes to draw on.
+    cells : list of dict
+        Cell data as returned by _select_example_cells.
+    window : float, optional
+        Window duration in seconds.
+    """
     n = len(cells)
     if n == 0:
         ax.text(0.5, 0.5, 'No trace data', transform=ax.transAxes,
@@ -401,7 +553,22 @@ def _plot_raster(ax, cells, window=60.0):
 
 
 def _with_window_metrics(res, prefix, true_spikes_list):
+    """ Return results dict augmented with window-based accuracy metrics.
 
+    Parameters
+    ----------
+    res : np.lib.npyio.NpzFile
+        Loaded NPZ results file.
+    prefix : str
+        Key prefix identifying the method (e.g. 'optim', 'oasis').
+    true_spikes_list : list of np.ndarray
+        Ground-truth spike times for each cell.
+
+    Returns
+    -------
+    dict
+        Results dictionary with precision/recall/F1 window metrics added.
+    """
     pk = f'{prefix}_precision_window'
     d  = dict(res)
     if pk in res.files:
@@ -416,7 +583,13 @@ def _with_window_metrics(res, prefix, true_spikes_list):
 
 
 def plot_figure(data_dir=_DEFAULT_DATA_DIR):
+    """ Load inference results and render Figure 1.
 
+    Parameters
+    ----------
+    data_dir : str, optional
+        Directory containing NPZ result files.
+    """
     paths = {k: os.path.join(data_dir, v) for k, v in _NPZ_NAMES.items()}
     for name, path in paths.items():
         if not os.path.exists(path):
@@ -537,7 +710,7 @@ def plot_figure(data_dir=_DEFAULT_DATA_DIR):
     for name, res, spk_k in cosmic_spike_keys:
         scores = compute_cosmic(true_spikes, list(res[spk_k]), fs)
         cosmic_arrays.append(scores)
-        print(f'  {name}: mean CosMIC = {np.mean(scores):.3f}')
+        print('  {}: mean CosMIC = {:.3f}'.format(name, np.mean(scores)))
     parts = cosmic_dist.violinplot(cosmic_arrays, positions=positions,
                                    showmedians=True, widths=0.65)
     for pc, name in zip(parts['bodies'], labels):
@@ -562,10 +735,10 @@ def plot_figure(data_dir=_DEFAULT_DATA_DIR):
     total_time.tick_params(axis='y', which='minor', length=4, width=0.5, colors='black')
     total_time.tick_params(axis='y', which='major', length=8, width=1,   colors='black')
 
-    print(f'\n{"Method":<14} {"Total time (s)":>16} {"Time/cell (s)":>14}')
+    print('\n{:<14} {:>16} {:>14}'.format('Method', 'Total time (s)', 'Time/cell (s)'))
     print('-' * 46)
     for name, total_t, tpc in zip(speed_labels, speed_total_times, speed_tpc_means):
-        print(f'{name:<14} {total_t:>16.1f} {tpc:>14.3f}')
+        print('{:<14} {:>16.1f} {:>14.3f}'.format(name, total_t, tpc))
     time_per_cell.bar(speed_positions, speed_tpc_means, color=speed_bar_colors, width=0.65)
     time_per_cell.set_xticks(speed_positions)
     time_per_cell.set_xticklabels(speed_tick_labels, fontsize=5, rotation=90, ha='right')
@@ -606,12 +779,35 @@ def plot_figure(data_dir=_DEFAULT_DATA_DIR):
     for ext in ('png', 'svg'):
         out = os.path.join(data_dir, f'figure1.{ext}')
         fig.savefig(out, bbox_inches='tight')
-        print(f'Saved -> {out}')
+        print('Saved to {}.'.format(out))
     plt.close(fig)
 
 
 def plot_running_median(ax, x, y, n_bins=7, vertical=False, fb=True, color='k'):
+    """ Overlay a running-median curve with SEM band on an axes.
 
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Axes to draw on.
+    x : np.ndarray
+        Independent variable values.
+    y : np.ndarray
+        Dependent variable values.
+    n_bins : int, optional
+        Number of bins for the running median.
+    vertical : bool, optional
+        If True, plot x vs bin_means instead of bin_means vs x.
+    fb : bool, optional
+        If True, fill between mean +/- SEM.
+    color : str, optional
+        Line and fill color.
+
+    Returns
+    -------
+    float
+        Maximum value of bin_means + tuning_err.
+    """
     import scipy.stats
     mask = ~np.isnan(x) & ~np.isnan(y)
     if np.sum(mask) == 0:
@@ -634,18 +830,24 @@ def plot_running_median(ax, x, y, n_bins=7, vertical=False, fb=True, color='k'):
         if fb:
             ax.fill_betweenx(centers, bin_means - tuning_err, bin_means + tuning_err,
                              color=color, alpha=0.2)
-            
-    # do a linear regressiona and print the slope
+
+    # Do a linear regression and print the slope.
     if len(x_use) > 1:
         slope, intercept, r_value, p_value, std_err = scipy.stats.linregress(x_use, y_use)
-        print(f"Linear regression slope: {slope:.4f}, R-squared: {r_value**2:.4f}")
+        print('Linear regression slope: {:.4f}, R-squared: {:.4f}'.format(slope, r_value**2))
 
     return np.nanmax(bin_means + tuning_err)
 
 
 
 def print_stats(data_dir=_DEFAULT_DATA_DIR):
+    """ Print summary statistics for Figure 1 to the terminal.
 
+    Parameters
+    ----------
+    data_dir : str, optional
+        Directory containing NPZ result files.
+    """
     paths = {k: os.path.join(data_dir, v) for k, v in _NPZ_NAMES.items()}
     for name, path in paths.items():
         if not os.path.exists(path):
@@ -666,7 +868,7 @@ def print_stats(data_dir=_DEFAULT_DATA_DIR):
     CASCADE_GPU_RESULTS = _with_window_metrics(CASCADE_GPU_RESULTS, 'cascade', true_spikes)
     CASCADE_CPU_RESULTS = _with_window_metrics(CASCADE_CPU_RESULTS, 'cascade', true_spikes)
 
-    # mirror plot_figure's metric selection so these stats match the saved figure
+    # Mirror plot_figure's metric selection so these stats match the saved figure.
     suffix = '' if USE_STRICT_ACCURACY else '_window'
     method_entries = [
         ('OMSI',        MINE_RESULTS,        f'optim_precision{suffix}',   f'optim_recall{suffix}',   'optim_spikes',   float(MINE_RESULTS['optim_time'])),
@@ -683,7 +885,7 @@ def print_stats(data_dir=_DEFAULT_DATA_DIR):
     print('FIGURE 1 STATISTICS')
     print('='*78)
 
-    print(f'\n{"Method":<14}  {"F_beta median":>14}  {"F_beta IQR":>11}  {"CosMIC median":>14}  {"CosMIC IQR":>11}')
+    print('\n{:<14}  {:>14}  {:>11}  {:>14}  {:>11}'.format('Method', 'F_beta median', 'F_beta IQR', 'CosMIC median', 'CosMIC IQR'))
     print('-'*70)
     fb_data = {}
     for label, res, prec_k, rec_k, spk_k, total_t in method_entries:
@@ -694,10 +896,9 @@ def print_stats(data_dir=_DEFAULT_DATA_DIR):
         fb_data[label] = fb
         fb_med = np.nanmedian(fb);     fb_iqr = np.subtract(*np.nanpercentile(fb,     [75, 25]))
         co_med = np.nanmedian(cosmic); co_iqr = np.subtract(*np.nanpercentile(cosmic, [75, 25]))
-        print(f'{label:<14}  {fb_med:>14.3f}  {fb_iqr:>11.3f}  '
-              f'{co_med:>14.3f}  {co_iqr:>11.3f}')
+        print('{:<14}  {:>14.3f}  {:>11.3f}  {:>14.3f}  {:>11.3f}'.format(label, fb_med, fb_iqr, co_med, co_iqr))
 
-    print(f'\n{"Method":<14}  {"Total time (min)":>17}  {"Time/cell (sec)":>16}')
+    print('\n{:<14}  {:>17}  {:>16}'.format('Method', 'Total time (min)', 'Time/cell (sec)'))
     print('-'*52)
     fmcsi_total_s = None
     for label, res, prec_k, rec_k, spk_k, total_t in method_entries:
@@ -705,27 +906,26 @@ def print_stats(data_dir=_DEFAULT_DATA_DIR):
             fmcsi_total_s = total_t
         total_min = total_t / 60.0
         tpc_sec   = total_t / n_cells
-        print(f'{label:<14}  {total_min:>17.3f}  {tpc_sec:>16.3f}')
+        print('{:<14}  {:>17.3f}  {:>16.3f}'.format(label, total_min, tpc_sec))
 
-    print(f'\n{"Method":<14}  {"% diff from fMCSI total time":>30}')
+    print('\n{:<14}  {:>30}'.format('Method', '% diff from fMCSI total time'))
     print('-'*50)
     for label, res, prec_k, rec_k, spk_k, total_t in method_entries:
         if label == 'OMSI':
-            print(f'{label:<14}  {"(reference)":>30}')
+            print('{:<14}  {:>30}'.format(label, '(reference)'))
             continue
         pct = (total_t - fmcsi_total_s) / total_t * 100.0
         sign = '+' if pct >= 0 else ''
-        print(f'{label:<14}  {sign}{pct:>28.1f}%')
+        print('{:<14}  {}{:>28.1f}%'.format(label, sign, pct))
 
     matlab_t = float(MATLAB_RESULTS['tradmat_time'])
     if fmcsi_total_s and fmcsi_total_s > 0:
         oom = np.log10(matlab_t / fmcsi_total_s)
-        print(f'\nOrder-of-magnitude difference (fMCSI vs MATLAB): {oom:.2f}  '
-              f'(MATLAB is ~{10**oom:.1f}x slower, 10^{oom:.2f})')
+        print('\nOrder-of-magnitude difference (fMCSI vs MATLAB): {:.2f}  (MATLAB is ~{:.1f}x slower, 10^{:.2f})'.format(oom, 10**oom, oom))
 
 
 if __name__ == '__main__':
-    
+
     parser = argparse.ArgumentParser(
         description='Figure 1: fixed benchmark on simulated data'
     )

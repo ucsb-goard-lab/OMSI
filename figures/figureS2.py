@@ -1,5 +1,43 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+figures/figureS2.py
+
+Generates supplemental figure S2: per-sensor CosMIC distributions and example spike-raster cells.
+
+Functions
+---------
+_dff_kurtosis
+    Excess kurtosis on a dF/F trace.
+_snr_from_fluo
+    Signal-to-noise ratio from a fluorescence trace.
+_patch_records_kurtosis
+    Replace stored kurtosis scalars with dF/F kurtosis from trace files.
+_get_sensor
+    Infer sensor label from a dataset folder name.
+_load_records
+    Load scalar records from an NPZ file into a list of dicts.
+_traces_dir
+    Return path to the traces directory for a given method.
+_load_all_records
+    Load benchmark records for all methods from data_dir.
+_best_window
+    Find the window that best balances spike count and detection recall.
+_select_sensor_cells
+    Select three representative cells for a given sensor.
+_plot_single_raster
+    Draw a spike raster and dF/F trace for one cell.
+_plot_cosmic_violins
+    Draw per-method CosMIC violin plots for one sensor.
+_plot_kurtosis_hist
+    Draw a kurtosis histogram for one sensor.
+plot_figure
+    Assemble and save figure S2.
+main
+    Parse command-line arguments and call plot_figure.
+
+
+DMM, March 2026
+"""
 
 import argparse
 import os
@@ -18,6 +56,7 @@ mpl.rcParams['font.size']    = 7
 
 def _dff_kurtosis(fluo):
     """Excess kurtosis computed on a dF/F-normalised trace (8th-pct baseline)."""
+
     f = np.asarray(fluo, dtype=np.float64)
     b = float(np.percentile(f, 8))
     if abs(b) < 1.0:
@@ -31,6 +70,8 @@ def _dff_kurtosis(fluo):
 
 
 def _snr_from_fluo(fluo):
+    """Signal-to-noise ratio from a fluorescence trace (99th-8th pct / scaled MAD)."""
+
     f  = np.asarray(fluo, dtype=np.float64)
     fv = f[np.isfinite(f)]
     if len(fv) < 2:
@@ -41,6 +82,7 @@ def _snr_from_fluo(fluo):
 
 def _patch_records_kurtosis(all_records, data_dir):
     """Replace stored kurtosis scalars with dF/F kurtosis from trace files."""
+
     for method_key, recs in all_records.items():
         traces_dir = os.path.join(data_dir, f'ground_truth_traces_{method_key}')
         if not os.path.isdir(traces_dir):
@@ -87,6 +129,8 @@ N_SENSORS       = len(SENSORS)
 
 
 def _get_sensor(ds_folder):
+    """Infer sensor label from a dataset folder name."""
+
     s = ds_folder.lower()
     for keyword, label in [
         ('gcaMP8s', 'GCaMP8s'), ('gcaMP8m', 'GCaMP8m'), ('gcaMP8f', 'GCaMP8f'),
@@ -101,6 +145,8 @@ def _get_sensor(ds_folder):
 
 
 def _load_records(path):
+    """Load scalar records from an NPZ file, returning a list of dicts."""
+
     d    = np.load(path, allow_pickle=True)
     keys = list(d.files)
     if not keys:
@@ -121,10 +167,14 @@ def _load_records(path):
 
 
 def _traces_dir(data_dir, method_key):
+    """Return path to the ground-truth traces directory for a given method."""
+
     return os.path.join(data_dir, f'ground_truth_traces_{method_key}')
 
 
 def _load_all_records(data_dir):
+    """Load benchmark records for every method found under data_dir."""
+
     all_records = {}
     for method_key in _METHOD_ORDER:
         path = os.path.join(data_dir, f'ground_truth_results_{method_key}.npz')
@@ -134,12 +184,35 @@ def _load_all_records(data_dir):
         for r in recs:
             r['method'] = method_key
         all_records[method_key] = recs
-        print(f'  Loaded {len(recs):5d} records for {method_key}')
+        print('  Loaded {:5d} records for {}.'.format(len(recs), method_key))
     return all_records
 
 
 def _best_window(raw, fs, true_spk, pred_spks_list,
                  window=30.0, target_spikes=10):
+    """Find the window that best balances spike count and detection recall.
+
+    Parameters
+    ----------
+    raw : array-like
+        Raw fluorescence trace.
+    fs : float
+        Frame rate in Hz.
+    true_spk : ndarray
+        Ground-truth spike times in seconds.
+    pred_spks_list : list of ndarray
+        Predicted spike times from each method.
+    window : float, optional
+        Window length in seconds (default 30).
+    target_spikes : int, optional
+        Ideal spike count in the window (default 10).
+
+    Returns
+    -------
+    float
+        Start time in seconds of the best window.
+    """
+
     block        = max(1, int(window * fs))
     n            = len(raw)
     best_t0, best_score = 0.0, -np.inf
@@ -165,6 +238,22 @@ def _best_window(raw, fs, true_spk, pred_spks_list,
 
 
 def _select_sensor_cells(data_dir, all_records, sensor):
+    """Select three cells spanning the CosMIC percentile range for a sensor.
+
+    Parameters
+    ----------
+    data_dir : str
+        Directory containing trace NPZ files.
+    all_records : dict
+        Benchmark records keyed by method name.
+    sensor : str
+        Sensor label to filter on.
+
+    Returns
+    -------
+    list of dict
+        Cell data dicts containing dF/F, spike times, and metadata.
+    """
 
     fmcsi_recs = [r for r in all_records.get('fmcsi', [])
                   if _get_sensor(r['dataset']) == sensor]
@@ -207,7 +296,7 @@ def _select_sensor_cells(data_dir, all_records, sensor):
                     kurtosis    = _dff_kurtosis(dff)
                     snr         = _snr_from_fluo(dff)
             except Exception as exc:
-                print(f'    Warning loading {tp}: {exc}')
+                print('    Warning loading {}: {}.'.format(tp, exc))
 
         if dff is None or fs is None:
             continue
@@ -247,6 +336,23 @@ def _select_sensor_cells(data_dir, all_records, sensor):
 def _plot_single_raster(ax, cell, window=30.0,
                         show_xlabels=True, show_method_labels=True,
                         cell_number=None):
+    """Draw a spike raster and dF/F trace for one cell.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Target axes.
+    cell : dict
+        Cell data dict returned by _select_sensor_cells.
+    window : float, optional
+        Display window length in seconds (default 30).
+    show_xlabels : bool, optional
+        Whether to draw x-axis tick labels.
+    show_method_labels : bool, optional
+        Whether to draw row method labels.
+    cell_number : int or None, optional
+        Cell index label drawn in the centre.
+    """
 
     rr  = 0.85
     th  = 2.0
@@ -318,6 +424,19 @@ def _plot_single_raster(ax, cell, window=30.0,
 
 
 def _plot_cosmic_violins(ax, all_records, sensor, selected_cells):
+    """Draw per-method CosMIC violin plots for one sensor.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Target axes.
+    all_records : dict
+        Benchmark records keyed by method name.
+    sensor : str
+        Sensor label to filter on.
+    selected_cells : list of dict
+        Selected cells to mark with a star on the violins.
+    """
 
     method_positions  = {}
     x_pos             = 0
@@ -368,6 +487,19 @@ def _plot_cosmic_violins(ax, all_records, sensor, selected_cells):
 
 
 def _plot_kurtosis_hist(ax, all_records, sensor, selected_cells):
+    """Draw a kurtosis histogram for one sensor.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Target axes.
+    all_records : dict
+        Benchmark records keyed by method name.
+    sensor : str
+        Sensor label to filter on.
+    selected_cells : list of dict
+        Selected cells to mark with vertical lines.
+    """
 
     recs  = [r for r in all_records.get('fmcsi', [])
              if _get_sensor(r['dataset']) == sensor]
@@ -390,19 +522,27 @@ def _plot_kurtosis_hist(ax, all_records, sensor, selected_cells):
     ax.tick_params(axis='both', labelsize=5.5)
 
 
-
 def plot_figure(data_dir=_DEFAULT_DATA_DIR, out_dir=_DEFAULT_OUT_DIR):
+    """Load benchmark data and save figure S2.
+
+    Parameters
+    ----------
+    data_dir : str, optional
+        Directory containing ground-truth result NPZ files.
+    out_dir : str, optional
+        Directory to write the output figure.
+    """
+
     os.makedirs(out_dir, exist_ok=True)
 
     print('Loading figure4 results...')
     all_records = _load_all_records(data_dir)
     _patch_records_kurtosis(all_records, data_dir)
     if not all_records:
-        print(f'No results found in {data_dir}. '
-              f'Run figure4.py --mode test first.')
+        print('No results found in {}. Run figure4.py --mode test first.'.format(data_dir))
         return
-    print(f'Loaded {sum(len(v) for v in all_records.values())} total records '
-          f'across {len(all_records)} methods.\n')
+    print('Loaded {} total records across {} methods.\n'.format(
+        sum(len(v) for v in all_records.values()), len(all_records)))
 
     fig = plt.figure(figsize=(6.5, 5), dpi=200)
 
@@ -413,7 +553,7 @@ def plot_figure(data_dir=_DEFAULT_DATA_DIR, out_dir=_DEFAULT_OUT_DIR):
     )
 
     for si, sensor in enumerate(SENSORS):
-        print(f'[{sensor}]  Selecting example cells...')
+        print('[{}]  Selecting example cells...'.format(sensor))
         selected = _select_sensor_cells(data_dir, all_records, sensor)
 
         inner_gs = gridspec.GridSpecFromSubplotSpec(
@@ -425,7 +565,7 @@ def plot_figure(data_dir=_DEFAULT_DATA_DIR, out_dir=_DEFAULT_OUT_DIR):
         )
 
         if not selected:
-            print(f'  No cells found for {sensor} — skipping block.')
+            print('  No cells found for {} -- skipping block.'.format(sensor))
             for ri in range(ROWS_PER_SENSOR):
                 fig.add_subplot(inner_gs[ri, 0:2]).axis('off')
             fig.add_subplot(inner_gs[0:2, 2]).axis('off')
@@ -433,7 +573,7 @@ def plot_figure(data_dir=_DEFAULT_DATA_DIR, out_dir=_DEFAULT_OUT_DIR):
             continue
 
         cosmic_str = ', '.join(f'{c["cosmic"]:.2f}' for c in selected)
-        print(f'  Selected {len(selected)} cells (CosMIC: {cosmic_str})')
+        print('  Selected {} cells (CosMIC: {}).'.format(len(selected), cosmic_str))
 
         for ci, cell in enumerate(selected):
             ax = fig.add_subplot(inner_gs[ci, 0:2])
@@ -470,12 +610,12 @@ def plot_figure(data_dir=_DEFAULT_DATA_DIR, out_dir=_DEFAULT_OUT_DIR):
     for ext in ('png', 'svg'):
         out = os.path.join(out_dir, f'figureS2.{ext}')
         fig.savefig(out, bbox_inches='tight')
-        print(f'\nSaved -> {out}')
+        print('\nSaved {}.'.format(out))
     plt.close(fig)
 
 
 def main():
-    
+
     parser = argparse.ArgumentParser(
         description='Figure S2 — per-sensor CosMIC distributions and example cells'
     )
@@ -488,5 +628,4 @@ def main():
 
 
 if __name__ == '__main__':
-    
     main()

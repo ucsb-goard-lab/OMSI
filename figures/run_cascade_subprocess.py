@@ -1,5 +1,25 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+figures/run_cascade_subprocess.py
+
+CASCADE subprocess helper -- runs spike inference inside the cascade conda environment.
+
+Functions
+---------
+_patched_il_init
+    Keras InputLayer patch for batch_shape compatibility.
+_probs_to_spikes
+    Convert CASCADE probability trace to spike times.
+mode_inference
+    Run CASCADE forward inference and save outputs to NPZ.
+mode_loo_predict
+    Run leave-one-out CASCADE prediction across all held-out cells.
+main
+    Parse CLI arguments and dispatch to inference or loo-predict mode.
+
+
+DMM, March 2026
+"""
 
 import argparse
 import os
@@ -17,9 +37,7 @@ if '--device' in sys.argv:
 if _device_arg == 'cpu':
     os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 else:
-
     os.environ.pop('CUDA_VISIBLE_DEVICES', None)
-
     os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 
     try:
@@ -28,18 +46,19 @@ else:
         if gpus:
             for _gpu in gpus:
                 tf.config.experimental.set_memory_growth(_gpu, True)
-            print(f"[cascade-subprocess] GPU(s) visible: {[g.name for g in gpus]}")
+            print('[cascade-subprocess] GPU(s) visible: {}.'.format([g.name for g in gpus]))
         else:
-            print("[cascade-subprocess] WARNING: no GPU visible to TensorFlow — "
-                  "running on CPU. If GPU was intended, check CUDA/driver install.")
+            print('[cascade-subprocess] WARNING: no GPU visible to TensorFlow -- '
+                  'running on CPU. If GPU was intended, check CUDA/driver install.')
     except Exception as _gpu_exc:
-        print(f"[cascade-subprocess] Could not configure GPU: {_gpu_exc}")
+        print('[cascade-subprocess] Could not configure GPU: {}.'.format(_gpu_exc))
 
 try:
     import keras.engine.input_layer as _kil
     _orig_il_init = _kil.InputLayer.__init__
 
     def _patched_il_init(self, *args, **kwargs):
+        """ Remap batch_shape to batch_input_shape for older Keras compatibility. """
         if 'batch_shape' in kwargs and 'batch_input_shape' not in kwargs:
             kwargs['batch_input_shape'] = kwargs.pop('batch_shape')
         _orig_il_init(self, *args, **kwargs)
@@ -58,15 +77,29 @@ except Exception as _e:
     pass
 
 
-#   'peaks'     : find local maxima above `height` with a minimum inter-peak
-#                 distance of 50 ms (original CASCADE behaviour).
-#   'threshold' : return every frame whose probability exceeds `height`,
-#                 equivalent to the frame-by-frame threshold used by OASIS.
+# CASCADE_SPIKE_DETECTION controls how probability traces are converted to spike times.
+# 'peaks'     : find local maxima above height with min inter-peak distance of 50 ms.
+# 'threshold' : return every frame whose probability exceeds height.
 CASCADE_SPIKE_DETECTION = 'peaks'
 
 
 def _probs_to_spikes(probs, fs, height=0.5):
+    """ Convert CASCADE probability trace to spike times in seconds.
 
+    Parameters
+    ----------
+    probs : np.ndarray
+        Per-frame spike probability, shape (n_frames,).
+    fs : float
+        Sampling rate in Hz.
+    height : float, optional
+        Detection threshold (probability units).
+
+    Returns
+    -------
+    spike_times : np.ndarray
+        Spike times in seconds.
+    """
     if CASCADE_SPIKE_DETECTION == 'threshold':
         return np.where(probs > height)[0] / fs
 
@@ -76,7 +109,13 @@ def _probs_to_spikes(probs, fs, height=0.5):
 
 
 def mode_inference(args):
+    """ Run CASCADE forward inference on dF/F traces and save results.
 
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments with fields: input, output, model.
+    """
     import cascade2p.cascade as cascade
 
     data = np.load(args.input, allow_pickle=True)
@@ -85,14 +124,15 @@ def mode_inference(args):
     n_cells = dff.shape[0]
 
     model_name = getattr(args, 'model', None) or 'Global_EXC_30Hz_smoothing50ms_causalkernel'
-    print(f"[cascade-subprocess] inference  n_cells={n_cells}  fs={fs:.1f}  model={model_name}")
+    print('[cascade-subprocess] inference  n_cells={}  fs={:.1f}  model={}'.format(
+        n_cells, fs, model_name))
 
     t0 = time.time()
     import os
     model_folder = os.path.join(os.path.dirname(os.path.dirname(cascade.__file__)), "Pretrained_models")
     probs = cascade.predict(model_name, dff, model_folder=model_folder, verbosity=1)
     elapsed = time.time() - t0
-    print(f"[cascade-subprocess] finished in {elapsed:.1f}s")
+    print('[cascade-subprocess] Finished in {:.1f}s.'.format(elapsed))
 
     spikes = []
     for i in range(n_cells):
@@ -105,54 +145,61 @@ def mode_inference(args):
         cascade_time=np.float64(elapsed),
         fs=np.float32(fs),
     )
-    print(f"[cascade-subprocess] saved -> {args.output}")
+    print('[cascade-subprocess] Saved to {}.'.format(args.output))
 
 
 def mode_loo_predict(args):
+    """ Run leave-one-out CASCADE prediction for all held-out cells.
 
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments with fields: raster_cells, loo_models_dir, output.
+    """
     import cascade2p.cascade as cascade
 
     if not os.path.exists(args.raster_cells):
-        raise FileNotFoundError(f"raster_cells NPZ not found: {args.raster_cells}")
+        raise FileNotFoundError('raster_cells NPZ not found: {}'.format(args.raster_cells))
 
     data = np.load(args.raster_cells, allow_pickle=False)
     n_cells = int(data['n_cells'])
     loo_dir = args.loo_models_dir
-    print(f"[cascade-subprocess] loo-predict  n_cells={n_cells}  loo_dir={loo_dir}")
+    print('[cascade-subprocess] loo-predict  n_cells={}  loo_dir={}'.format(n_cells, loo_dir))
 
     preds = {'n_cells': np.int32(n_cells)}
 
     for i in range(n_cells):
-        ds_raw = data[f'dataset_{i}'].item()
+        ds_raw = data['dataset_{}'.format(i)].item()
         ds = ds_raw.decode() if hasattr(ds_raw, 'decode') else str(ds_raw)
-        fs = float(data[f'fs_{i}'])
-        dff = data[f'dff_{i}'].astype(np.float32)
+        fs = float(data['fs_{}'.format(i)])
+        dff = data['dff_{}'.format(i)].astype(np.float32)
 
         model_path = os.path.join(loo_dir, ds)
         if not os.path.isfile(os.path.join(model_path, 'config.yaml')):
-            print(f"  Cell {i} ({ds}): no LOO model found, skipping.")
-            preds[f'pred_spikes_{i}'] = np.array([], dtype=np.float64)
-            preds[f'dataset_{i}'] = data[f'dataset_{i}']
-            preds[f'cell_idx_{i}'] = data[f'cell_idx_{i}']
+            print('  Cell {} ({}): no LOO model found, skipping.'.format(i, ds))
+            preds['pred_spikes_{}'.format(i)] = np.array([], dtype=np.float64)
+            preds['dataset_{}'.format(i)] = data['dataset_{}'.format(i)]
+            preds['cell_idx_{}'.format(i)] = data['cell_idx_{}'.format(i)]
             continue
 
-        print(f"  Cell {i} ({ds})  fs={fs:.1f} Hz  n_frames={len(dff)} ...")
+        print('  Cell {} ({})  fs={:.1f} Hz  n_frames={}...'.format(i, ds, fs, len(dff)))
         dff_2d = dff[np.newaxis, :]
 
         probs_2d = cascade.predict(ds, dff_2d, model_folder=loo_dir, verbosity=0)
         probs = np.nan_to_num(probs_2d[0], nan=0.0)
         spk = _probs_to_spikes(probs, fs)
-        print(f"    -> {len(spk)} spikes detected")
+        print('    {} spikes detected.'.format(len(spk)))
 
-        preds[f'pred_spikes_{i}'] = spk.astype(np.float64)
-        preds[f'dataset_{i}'] = data[f'dataset_{i}']
-        preds[f'cell_idx_{i}'] = data[f'cell_idx_{i}']
+        preds['pred_spikes_{}'.format(i)] = spk.astype(np.float64)
+        preds['dataset_{}'.format(i)] = data['dataset_{}'.format(i)]
+        preds['cell_idx_{}'.format(i)] = data['cell_idx_{}'.format(i)]
 
     np.savez(args.output, **preds)
-    print(f"[cascade-subprocess] saved -> {args.output}")
+    print('[cascade-subprocess] Saved to {}.'.format(args.output))
 
 
 def main():
+
     parser = argparse.ArgumentParser(
         description='CASCADE subprocess helper (run in cascade conda env)'
     )

@@ -1,5 +1,26 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+figures/figureS3.py
+
+Generates supplemental figure S3: CASCADE spike-inference performance at 7.5 Hz vs 30 Hz on synthetic data.
+
+Functions
+---------
+_run_cascade_inference
+    Run CASCADE spike inference via a subprocess and return spike times.
+_fbeta
+    Compute vectorised F-beta score from arrays of precision and recall.
+run_test
+    Generate synthetic data, run CASCADE inference, and save benchmark results.
+plot_figure
+    Load benchmark results and generate figure S3.
+main
+    Parse command-line arguments and dispatch to run_test or plot_figure.
+
+
+DMM, March 2026
+"""
+
 import argparse
 import os
 import subprocess
@@ -40,6 +61,28 @@ _NPZ_NAME = 'cascade_7p5_vs_30hz_data.npz'
 
 
 def _run_cascade_inference(dff, fs, data_dir, prefix, device='gpu'):
+    """Run CASCADE spike inference via a subprocess and return spike times.
+
+    Parameters
+    ----------
+    dff : ndarray
+        dF/F trace array, shape (n_cells, n_frames) or (n_frames,).
+    fs : float
+        Frame rate in Hz.
+    data_dir : str
+        Directory for intermediate input/output NPZ files.
+    prefix : str
+        Filename prefix for intermediate files.
+    device : str, optional
+        Compute device ('gpu' or 'cpu', default 'gpu').
+
+    Returns
+    -------
+    list of ndarray
+        Predicted spike times per cell.
+    float
+        Elapsed inference time in seconds.
+    """
 
     input_path  = os.path.join(data_dir, f'{prefix}_input.npz')
     output_path = os.path.join(data_dir, f'{prefix}_output.npz')
@@ -60,6 +103,21 @@ def _run_cascade_inference(dff, fs, data_dir, prefix, device='gpu'):
 
 
 def _fbeta(prec, rec):
+    """Compute vectorised F-beta score from arrays of precision and recall.
+
+    Parameters
+    ----------
+    prec : array-like
+        Precision values.
+    rec : array-like
+        Recall values.
+
+    Returns
+    -------
+    ndarray
+        F-beta scores.
+    """
+
     p  = np.asarray(prec, dtype=float)
     r  = np.asarray(rec,  dtype=float)
     b2 = BETA ** 2
@@ -69,6 +127,15 @@ def _fbeta(prec, rec):
 
 
 def run_test(data_dir=_DEFAULT_DATA_DIR, run_cascade=True):
+    """Generate synthetic data, run CASCADE inference, and save benchmark results.
+
+    Parameters
+    ----------
+    data_dir : str, optional
+        Directory for output NPZ files.
+    run_cascade : bool, optional
+        Whether to run CASCADE inference (default True).
+    """
 
     from simulation_helpers import generate_synthetic_data
 
@@ -81,7 +148,7 @@ def run_test(data_dir=_DEFAULT_DATA_DIR, run_cascade=True):
 
     results = {}
     for fs, suffix in [(7.5, '7'), (30.0, '30')]:
-        print(f'\n=== {fs} Hz ===')
+        print('\n=== {} Hz ==='.format(fs))
         dff, true_spikes, _, _, _, _ = generate_synthetic_data(
             n_cells=n_cells, fs=fs, duration=duration, tau=tau)
 
@@ -95,10 +162,10 @@ def run_test(data_dir=_DEFAULT_DATA_DIR, run_cascade=True):
             try:
                 cascade_spikes, elapsed = _run_cascade_inference(
                     dff, fs, data_dir, f'cascade_samplerate_{fs}hz', device=dev)
-                print(f'  CASCADE ({dev.upper()}) finished in {elapsed:.1f}s')
+                print('  CASCADE ({}) finished in {:.1f}s.'.format(dev.upper(), elapsed))
                 break
             except Exception as exc:
-                print(f'  CASCADE {dev.upper()} failed: {exc}')
+                print('  CASCADE {} failed: {}.'.format(dev.upper(), exc))
 
         if cascade_spikes is None:
             results[f'fb_{suffix}']     = np.full(n_cells, np.nan)
@@ -111,14 +178,21 @@ def run_test(data_dir=_DEFAULT_DATA_DIR, run_cascade=True):
         cosmic = helpers.compute_cosmic(true_spikes, cascade_spikes, fs)
         results[f'fb_{suffix}']     = fb
         results[f'cosmic_{suffix}'] = cosmic
-        print(f'  mean F_beta={np.nanmean(fb):.3f}  CosMIC={np.nanmean(cosmic):.3f}')
+        print('  Mean F_beta={:.3f}  CosMIC={:.3f}.'.format(np.nanmean(fb), np.nanmean(cosmic)))
 
     np.savez(out_path, **results)
-    print(f'\nSaved -> {out_path}')
+    print('\nSaved {}.'.format(out_path))
     print('Test mode complete.')
 
 
 def plot_figure(data_dir=_DEFAULT_DATA_DIR):
+    """Load benchmark results and generate figure S3.
+
+    Parameters
+    ----------
+    data_dir : str, optional
+        Directory containing the benchmark NPZ file.
+    """
 
     os.makedirs(data_dir, exist_ok=True)
 
@@ -166,12 +240,12 @@ def plot_figure(data_dir=_DEFAULT_DATA_DIR):
     for ext in ('png', 'svg'):
         out = os.path.join(data_dir, f'figureS3.{ext}')
         fig.savefig(out, bbox_inches='tight')
-        print(f'Saved -> {out}')
+        print('Saved {}.'.format(out))
     plt.close(fig)
 
 
 def main():
-    
+
     parser = argparse.ArgumentParser(
         description='Figure S3 — CASCADE performance at 7.5 Hz vs 30 Hz'
     )

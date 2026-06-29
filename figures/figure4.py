@@ -1,9 +1,68 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Full CASCADE ground-truth benchmark.
+figures/figure4.py
 
-Written DMM, March 2026
+Full ground-truth benchmark comparing OMSI, CaImAn, OASIS, and CASCADE across real two-photon datasets.
+
+Functions
+---------
+_dff_kurtosis
+    Excess kurtosis on a dF/F trace.
+_snr_from_fluo
+    Signal-to-noise ratio from a fluorescence trace.
+_oasis_spikes_from_s
+    Convert OASIS deconvolved signal to spike times.
+_cascade_model_for_fs
+    Return the CASCADE model name closest to the given frame rate.
+_is_interneuron_dataset
+    Return True if the dataset folder name contains an interneuron keyword.
+_save_records
+    Save a list of record dicts to an NPZ file.
+_load_records
+    Load scalar records from an NPZ file into a list of dicts.
+_fbeta
+    Compute F-beta score from scalar precision and recall values.
+_get_fbeta
+    Extract F-beta score from a benchmark record dict.
+get_tau
+    Return the calcium decay time constant for a dataset.
+get_ephys_rate
+    Return the electrophysiology sampling rate for a dataset.
+_get_sensor
+    Infer sensor label from a dataset folder name.
+compute_accuracy_window
+    Window-based many-to-one precision, recall, and F1 for spike lists.
+compute_accuracy_window_oto
+    One-to-one window matching via the Hungarian algorithm.
+_make_event_gt
+    Build an isolated-event ground-truth set from raw spike times.
+_build_params
+    Construct the OMSI deconvolution parameter dict for a dataset.
+process_dataset
+    Run one inference model on all cells in a dataset folder.
+test_figure
+    Run benchmark inference for all datasets and save results.
+_traces_dir
+    Return path to the traces directory for a given method.
+_load_all
+    Load and filter benchmark records for all methods from data_dir.
+_best_window_raster
+    Find the window with the best spike density for raster display.
+_build_snr_lookup
+    Return a SNR lookup dict from saved trace files.
+_load_raster_cells
+    Select and save example cells for the spike raster panel.
+_plot_raster
+    Draw the multi-cell spike raster panel.
+_draw_grouped_violins
+    Draw grouped violin plots by sensor for one performance metric.
+plot_figure
+    Load all benchmark data and save figure 4.
+main
+    Parse command-line arguments and dispatch to test_figure or plot_figure.
+
+
+DMM, March 2026
 """
 
 import argparse
@@ -44,6 +103,7 @@ TAU_RISE           = 0.05
 
 def _dff_kurtosis(fluo):
     """Excess kurtosis on a simple dF/F (8th-percentile baseline normalization)."""
+
     f = np.asarray(fluo, dtype=np.float64)
     b = float(np.percentile(f, 8))
     if abs(b) < 1.0:
@@ -57,6 +117,8 @@ def _dff_kurtosis(fluo):
 
 
 def _snr_from_fluo(fluo):
+    """Signal-to-noise ratio from a fluorescence trace (99th-8th pct / scaled MAD)."""
+
     f  = np.asarray(fluo, dtype=np.float64)
     fv = f[np.isfinite(f)]
     if len(fv) < 2:
@@ -87,6 +149,25 @@ OASIS_SPIKE_DETECTION = 'peaks'
 
 
 def _oasis_spikes_from_s(s, sigma, fs, height=1.0):
+    """Convert OASIS deconvolved signal to spike times.
+
+    Parameters
+    ----------
+    s : ndarray
+        Deconvolved signal from OASIS.
+    sigma : float
+        Noise standard deviation.
+    fs : float
+        Frame rate in Hz.
+    height : float, optional
+        Threshold multiplier on sigma (default 1.0).
+
+    Returns
+    -------
+    ndarray
+        Spike times in seconds.
+    """
+
     thresh = height * sigma
     if OASIS_SPIKE_DETECTION == 'peaks':
         min_dist = max(1, int(0.05 * fs))
@@ -96,6 +177,7 @@ def _oasis_spikes_from_s(s, sigma, fs, height=1.0):
 
 def _cascade_model_for_fs(fs):
     """Return the pretrained CASCADE model name closest to the given frame rate."""
+
     return min(_CASCADE_MODELS, key=lambda x: abs(x[0] - fs))[1]
 
 _SENSOR_ORDER = [
@@ -117,6 +199,8 @@ _INTERNEURON_KEYWORDS = {'PV', 'SST', 'VIP', 'Interneuron', 'inhibitory'}
 
 
 def _is_interneuron_dataset(ds_folder):
+    """Return True if the dataset folder name contains an interneuron keyword."""
+
     parts = ds_folder.replace('-', ' ').replace('_', ' ').split()
     return any(kw.lower() in p.lower() for p in parts for kw in _INTERNEURON_KEYWORDS)
 
@@ -149,6 +233,15 @@ RASTER_PINS    = [
 
 
 def _save_records(records, path):
+    """Save a list of record dicts to an NPZ file.
+
+    Parameters
+    ----------
+    records : list of dict
+        Benchmark records to save.
+    path : str
+        Output NPZ file path.
+    """
 
     if not records:
         np.savez(path)
@@ -168,6 +261,7 @@ def _save_records(records, path):
 
 
 def _load_records(path):
+    """Load scalar records from an NPZ file, returning a list of dicts."""
 
     d = np.load(path, allow_pickle=True)
     keys = list(d.files)
@@ -189,6 +283,8 @@ def _load_records(path):
 
 
 def _fbeta(precision, recall):
+    """Compute F-beta score from scalar precision and recall values."""
+
     p, r = float(precision), float(recall)
     b2 = BETA ** 2
     denom = b2 * p + r
@@ -196,10 +292,25 @@ def _fbeta(precision, recall):
 
 
 def _get_fbeta(record):
+    """Extract F-beta score from a benchmark record dict."""
+
     return _fbeta(record['precision_window'], record['recall_window'])
 
 
 def get_tau(ds_folder):
+    """Return the calcium decay time constant (s) for a dataset.
+
+    Parameters
+    ----------
+    ds_folder : str
+        Dataset folder name.
+
+    Returns
+    -------
+    float
+        Decay time constant in seconds.
+    """
+
     ds_id = ds_folder[:4].upper()
     if ds_id in _DS_TAU:
         return _DS_TAU[ds_id]
@@ -211,10 +322,14 @@ def get_tau(ds_folder):
 
 
 def get_ephys_rate(ds_folder):
+    """Return the electrophysiology sampling rate (Hz) for a dataset."""
+
     return _DS_EPHYS_RATE.get(ds_folder[:4].upper(), _DEFAULT_EPHYS)
 
 
 def _get_sensor(ds_folder):
+    """Infer sensor label from a dataset folder name."""
+
     s = ds_folder.lower()
     for keyword, label in [
         ('gcaMP8s', 'GCaMP8s'), ('gcaMP8m', 'GCaMP8m'), ('gcaMP8f', 'GCaMP8f'),
@@ -229,6 +344,26 @@ def _get_sensor(ds_folder):
 
 
 def compute_accuracy_window(true_spikes, predicted_spikes, tolerance=0.1):
+    """Compute window-based (many-to-one) precision, recall, and F1 for spike lists.
+
+    Parameters
+    ----------
+    true_spikes : list of ndarray
+        Ground-truth spike times per cell.
+    predicted_spikes : list of ndarray
+        Predicted spike times per cell.
+    tolerance : float, optional
+        Matching window half-width in seconds (default 0.1).
+
+    Returns
+    -------
+    ndarray
+        Precision per cell.
+    ndarray
+        Recall per cell.
+    ndarray
+        F1 score per cell.
+    """
 
     precs, recs, f1s = [], [], []
     for t, p in zip(true_spikes, predicted_spikes):
@@ -252,9 +387,30 @@ def compute_accuracy_window(true_spikes, predicted_spikes, tolerance=0.1):
 
 
 def compute_accuracy_window_oto(true_spikes, predicted_spikes, tolerance=0.1):
-    """One-to-one window matching via the Hungarian algorithm.  Each true spike
-    and each predicted spike can participate in at most one match, and the
-    assignment maximises the total number of matched pairs."""
+    """One-to-one window matching via the Hungarian algorithm.
+
+    Each true spike and each predicted spike can participate in at most one
+    match, and the assignment maximises the total number of matched pairs.
+
+    Parameters
+    ----------
+    true_spikes : list of ndarray
+        Ground-truth spike times per cell.
+    predicted_spikes : list of ndarray
+        Predicted spike times per cell.
+    tolerance : float, optional
+        Matching window half-width in seconds (default 0.1).
+
+    Returns
+    -------
+    ndarray
+        Precision per cell.
+    ndarray
+        Recall per cell.
+    ndarray
+        F1 score per cell.
+    """
+
     from scipy.optimize import linear_sum_assignment
 
     precs, recs, f1s = [], [], []
@@ -284,6 +440,22 @@ def compute_accuracy_window_oto(true_spikes, predicted_spikes, tolerance=0.1):
 
 
 def _make_event_gt(spike_times_s, tau_s, event_window=0.250):
+    """Build an isolated-event ground-truth set from raw spike times.
+
+    Parameters
+    ----------
+    spike_times_s : array-like
+        Raw spike times in seconds.
+    tau_s : float
+        Indicator decay time constant in seconds.
+    event_window : float, optional
+        Maximum intra-burst ISI to group spikes into one event (default 0.25 s).
+
+    Returns
+    -------
+    ndarray
+        Onset time of each isolated event in seconds.
+    """
 
     t = np.asarray(spike_times_s, dtype=np.float64)
     if len(t) == 0:
@@ -302,11 +474,25 @@ def _make_event_gt(spike_times_s, tau_s, event_window=0.250):
 
 
 def _build_params(fs, tau):
+    """Construct the OMSI deconvolution parameter dict for a given dataset.
+
+    Parameters
+    ----------
+    fs : float
+        Frame rate in Hz.
+    tau : float
+        Calcium decay time constant in seconds.
+
+    Returns
+    -------
+    dict
+        Parameter dict suitable for OMSI.deconv.
+    """
 
     g_rise  = float(np.exp(-1.0 / (TAU_RISE * fs)))
     g_decay = float(np.exp(-1.0 / (tau * fs)))
 
-    # close-pole / fast-indicator cells (e.g. GCaMP8 at >=100 Hz) are detected
+    # Close-pole / fast-indicator cells (e.g. GCaMP8 at >=100 Hz) are detected
     # and switched to an AR(1) kernel at the full frame rate automatically by
     # OMSI.deconv -- no special-casing needed here.
     return {
@@ -318,6 +504,24 @@ def _build_params(fs, tau):
     }
 
 def process_dataset(ds_folder, ground_truth_dir, model):
+    """Run one inference model on all cells in a dataset folder.
+
+    Parameters
+    ----------
+    ds_folder : str
+        Dataset folder name within ground_truth_dir.
+    ground_truth_dir : str
+        Root directory of the CASCADE Ground_truth data.
+    model : str
+        Method to run ('fmcsi', 'matlab', 'oasis', or 'cascade_loo').
+
+    Returns
+    -------
+    list of dict
+        Per-cell benchmark records.
+    dict or None
+        Trace arrays dict suitable for np.savez, or None if no cells found.
+    """
 
     ds_path    = os.path.join(ground_truth_dir, ds_folder)
     tau        = get_tau(ds_folder)
@@ -353,20 +557,20 @@ def process_dataset(ds_folder, ground_truth_dir, model):
             cells.append({'fluo': fluo, 'spk': spk,
                           'fs': 1.0 / dt, 'fname': fname, 'kurt': float(kurt)})
         except Exception as exc:
-            print(f"    Warning — skipping {fname}: {exc}")
+            print('    Warning -- skipping {}: {}.'.format(fname, exc))
 
-    print(f"  {ds_folder}: {len(cells)} cells, tau={tau}s")
+    print('  {}: {} cells, tau={}s.'.format(ds_folder, len(cells), tau))
     if not cells:
         return [], None
 
     fs = float(np.median([c['fs'] for c in cells]))
     if not (np.isfinite(fs) and fs > 0):
-        print(f"  Could not determine valid fs for {ds_folder} — skipping.")
+        print('  Could not determine valid fs for {} -- skipping.'.format(ds_folder))
         return [], None
 
     n_cells     = len(cells)
     true_spikes = [c['spk'][np.isfinite(c['spk'])] for c in cells]
-    print(f"  Running {model} on {n_cells} cells at {fs:.1f} Hz ...")
+    print('  Running {} on {} cells at {:.1f} Hz...'.format(model, n_cells, fs))
     t0_bench = time.time()
 
     probs_list  = []
@@ -391,7 +595,7 @@ def process_dataset(ds_folder, ground_truth_dir, model):
                 spk = np.asarray(od['optim_spikes'][i], dtype=np.float64)
                 spikes_list.append(spk[np.isfinite(spk)])
         except Exception as exc:
-            print(f"    Warning — batch inference failed: {exc}")
+            print('    Warning -- batch inference failed: {}.'.format(exc))
             for cell in cells:
                 probs_list.append(np.zeros(len(cell['fluo']), dtype=np.float32))
                 spikes_list.append(np.array([], dtype=np.float64))
@@ -405,7 +609,7 @@ def process_dataset(ds_folder, ground_truth_dir, model):
                 probs_list.append(probs[0].astype(np.float32))
                 spikes_list.append(np.asarray(spks[0], dtype=np.float64))
             except Exception as exc:
-                print(f"    Warning — inference failed for {cell['fname']}: {exc}")
+                print('    Warning -- inference failed for {}: {}.'.format(cell['fname'], exc))
                 probs_list.append(np.zeros(len(cell['fluo']), dtype=np.float32))
                 spikes_list.append(np.array([], dtype=np.float64))
 
@@ -420,14 +624,14 @@ def process_dataset(ds_folder, ground_truth_dir, model):
                 spikes_list.append(_oasis_spikes_from_s(s, sigma, cell['fs']))
                 probs_list.append(s.astype(np.float32))
             except Exception as exc:
-                print(f"    Warning — inference failed for {cell['fname']}: {exc}")
+                print('    Warning -- inference failed for {}: {}.'.format(cell['fname'], exc))
                 probs_list.append(np.zeros(len(cell['fluo']), dtype=np.float32))
                 spikes_list.append(np.array([], dtype=np.float64))
 
     elif model == 'cascade_loo':
         import tempfile
         model_name = _cascade_model_for_fs(fs)
-        print(f"  CASCADE model: {model_name}")
+        print('  CASCADE model: {}.'.format(model_name))
         min_len = min(len(c['fluo']) for c in cells)
         dff_2d = np.stack([c['fluo'][:min_len] for c in cells], axis=0).astype(np.float32)
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -451,13 +655,13 @@ def process_dataset(ds_folder, ground_truth_dir, model):
                     probs_list.append(probs_2d_cas[i].astype(np.float32))
                     spikes_list.append(np.asarray(spikes_cas[i], dtype=np.float64))
             except subprocess.CalledProcessError as exc:
-                print(f"  WARNING: CASCADE subprocess failed: {exc}")
+                print('  Warning: CASCADE subprocess failed: {}.'.format(exc))
                 for cell in cells:
                     probs_list.append(np.zeros(len(cell['fluo']), dtype=np.float32))
                     spikes_list.append(np.array([], dtype=np.float64))
 
     elapsed = time.time() - t0_bench
-    print(f"  Finished in {elapsed:.1f}s  ({elapsed/n_cells:.2f}s/cell)")
+    print('  Finished in {:.1f}s ({:.2f}s/cell).'.format(elapsed, elapsed/n_cells))
 
     n_max    = max(len(p) for p in probs_list)
     probs_2d = np.zeros((n_cells, n_max), dtype=np.float32)
@@ -475,13 +679,13 @@ def process_dataset(ds_folder, ground_truth_dir, model):
         true_events, spikes_list, tolerance=0.1)
     cosmic = helpers.compute_cosmic(true_spikes, spikes_list, fs)
 
-    print(f"  Strict   P={np.mean(prec_s):.3f}  R={np.mean(rec_s):.3f}  "
-          f"F1={np.mean(f1_s):.3f}")
-    print(f"  Window   P={np.mean(prec_w):.3f}  R={np.mean(rec_w):.3f}  "
-          f"F1={np.mean(f1_w):.3f}")
-    print(f"  Win-OTO  P={np.mean(prec_w1):.3f}  R={np.mean(rec_w1):.3f}  "
-          f"F1={np.mean(f1_w1):.3f}")
-    print(f"  CosMIC   mean={np.mean(cosmic):.3f}")
+    print('  Strict   P={:.3f}  R={:.3f}  F1={:.3f}'.format(
+        np.mean(prec_s), np.mean(rec_s), np.mean(f1_s)))
+    print('  Window   P={:.3f}  R={:.3f}  F1={:.3f}'.format(
+        np.mean(prec_w), np.mean(rec_w), np.mean(f1_w)))
+    print('  Win-OTO  P={:.3f}  R={:.3f}  F1={:.3f}'.format(
+        np.mean(prec_w1), np.mean(rec_w1), np.mean(f1_w1)))
+    print('  CosMIC   mean={:.3f}'.format(np.mean(cosmic)))
 
     records = []
     for i, cell in enumerate(cells):
@@ -520,6 +724,18 @@ def process_dataset(ds_folder, ground_truth_dir, model):
 
 
 def test_figure(data_dir, ground_truth_dir, methods=None):
+    """Run benchmark inference for all datasets and save results.
+
+    Parameters
+    ----------
+    data_dir : str
+        Output directory for result and trace NPZ files.
+    ground_truth_dir : str
+        Root directory of the CASCADE Ground_truth data.
+    methods : list of str or None, optional
+        Methods to evaluate (default: all four).
+    """
+
     os.makedirs(data_dir, exist_ok=True)
     if methods is None:
         methods = ['fmcsi', 'oasis', 'matlab', 'cascade_loo']
@@ -530,8 +746,8 @@ def test_figure(data_dir, ground_truth_dir, methods=None):
         and d not in _EXCLUDED_DATASETS
         and not _is_interneuron_dataset(d)
     )
-    print(f"Found {len(ds_folders)} dataset folders "
-          f"({len(_EXCLUDED_DATASETS)} excluded).\n")
+    print('Found {} dataset folders ({} excluded).\n'.format(
+        len(ds_folders), len(_EXCLUDED_DATASETS)))
 
     for model in methods:
         traces_dir = os.path.join(data_dir, f'ground_truth_traces_{model}')
@@ -539,41 +755,55 @@ def test_figure(data_dir, ground_truth_dir, methods=None):
 
         all_records = []
         t_total = time.time()
-        print(f"\n{'='*65}")
-        print(f"  Method: {model}")
-        print(f"{'='*65}")
+        print('\n' + '='*65)
+        print('  Method: {}'.format(model))
+        print('='*65)
 
         for ds_folder in ds_folders:
-            print(f"\n{'─'*55}")
-            print(f"  Dataset: {ds_folder}")
+            print('\n' + '─'*55)
+            print('  Dataset: {}'.format(ds_folder))
             records, traces = process_dataset(ds_folder, ground_truth_dir, model)
             if records:
                 all_records.extend(records)
             if traces is not None:
                 npz_path = os.path.join(traces_dir, f'{ds_folder}_traces.npz')
                 np.savez(npz_path, **traces)
-                print(f"  Traces -> {npz_path}")
+                print('  Traces {}.'.format(npz_path))
 
-        print(f"\n{'='*65}")
-        print(f"  Total elapsed: {(time.time()-t_total)/60:.1f} min")
-        print(f"  Total cells evaluated: {len(all_records)}")
+        print('\n' + '='*65)
+        print('  Total elapsed: {:.1f} min.'.format((time.time()-t_total)/60))
+        print('  Total cells evaluated: {}.'.format(len(all_records)))
 
         out_path = os.path.join(data_dir, f'ground_truth_results_{model}.npz')
         _save_records(all_records, out_path)
-        print(f"  Results -> {out_path}")
+        print('  Results {}.'.format(out_path))
 
 
 def _traces_dir(data_dir, method_key):
+    """Return path to the ground-truth traces directory for a given method."""
+
     return os.path.join(data_dir, f'ground_truth_traces_{method_key}')
 
 
 def _load_all(data_dir):
+    """Load and filter benchmark records for all methods from data_dir.
+
+    Parameters
+    ----------
+    data_dir : str
+        Directory containing ground-truth result NPZ files.
+
+    Returns
+    -------
+    dict
+        Records keyed by method name, excluding interneuron and excluded datasets.
+    """
 
     all_records = {}
     for method_key in _METHOD_ORDER:
         npz_path = os.path.join(data_dir, f'ground_truth_results_{method_key}.npz')
         if not os.path.exists(npz_path):
-            print(f'  (skipping {method_key}: {npz_path} not found)')
+            print('  (Skipping {}: {} not found).'.format(method_key, npz_path))
             continue
         recs = _load_records(npz_path)
         recs = [r for r in recs if r.get('dataset') not in _EXCLUDED_DATASETS
@@ -586,12 +816,35 @@ def _load_all(data_dir):
             r['method']   = method_key
             ds_counts[ds] = idx + 1
         all_records[method_key] = recs
-        print(f'  Loaded {len(recs)} records for {method_key}')
+        print('  Loaded {} records for {}.'.format(len(recs), method_key))
     return all_records
 
 
 def _best_window_raster(raw, fs, true_spk, pred_spks_list,
                          window=30.0, target_spikes=10):
+    """Find the window with the best spike density for raster display.
+
+    Parameters
+    ----------
+    raw : array-like
+        Raw fluorescence trace.
+    fs : float
+        Frame rate in Hz.
+    true_spk : ndarray
+        Ground-truth spike times in seconds.
+    pred_spks_list : list of ndarray
+        Predicted spike times per method.
+    window : float, optional
+        Window length in seconds (default 30).
+    target_spikes : int, optional
+        Ideal spike count in the window (default 10).
+
+    Returns
+    -------
+    float
+        Start time in seconds of the best window.
+    """
+
     block = int(window * fs)
     n     = len(raw)
     best_t0, best_score = 0.0, -np.inf
@@ -615,6 +868,7 @@ def _best_window_raster(raw, fs, true_spk, pred_spks_list,
 
 def _build_snr_lookup(data_dir):
     """Return {(dataset, cell_idx): snr} from saved trace files (any available method)."""
+
     lookup = {}
     for method_key in _METHOD_ORDER:
         td = _traces_dir(data_dir, method_key)
@@ -636,6 +890,24 @@ def _build_snr_lookup(data_dir):
 
 
 def _load_raster_cells(data_dir, raster_cells_npz, window=30.0, min_spikes=5):
+    """Select example cells for the spike raster panel and save to NPZ.
+
+    Parameters
+    ----------
+    data_dir : str
+        Directory containing trace NPZ files.
+    raster_cells_npz : str
+        Output NPZ path for the selected raster cells.
+    window : float, optional
+        Display window length in seconds (default 30).
+    min_spikes : int, optional
+        Minimum spikes required in the window (default 5).
+
+    Returns
+    -------
+    list of dict
+        Selected cell data dicts.
+    """
 
     _REQUIRED = ['fmcsi', 'oasis', 'matlab']
 
@@ -726,14 +998,14 @@ def _load_raster_cells(data_dir, raster_cells_npz, window=30.0, min_spikes=5):
                 (c for c in pool if c['ds'] == ds_pin and c['cell_idx'] == ci_pin),
                 None)
             if match is None:
-                print(f'  WARNING: pinned cell ({ds_pin}, {ci_pin}) not found; '
-                      f'falling back to auto.')
+                print('  Warning: pinned cell ({}, {}) not found -- falling back to auto.'.format(
+                    ds_pin, ci_pin))
                 pin = None
             else:
                 selected.append(match)
         if pin is None:
             if not pool:
-                print(f'  WARNING: no candidate for sensor {sensor}')
+                print('  Warning: no candidate for sensor {}.'.format(sensor))
                 continue
             mean_kurt = np.mean([c['kurtosis'] for c in pool])
             selected.append(
@@ -749,11 +1021,23 @@ def _load_raster_cells(data_dir, raster_cells_npz, window=30.0, min_spikes=5):
         save[f'dataset_{i}']     = np.bytes_(c['ds'].encode())
         save[f'cell_idx_{i}']    = np.int32(c['cell_idx'])
     np.savez(raster_cells_npz, **save)
-    print(f'  Saved raster cell info -> {raster_cells_npz}')
+    print('  Saved raster cell info {}.'.format(raster_cells_npz))
     return selected
 
 
 def _plot_raster(ax, cells, window=60.0):
+    """Draw the multi-cell spike raster panel.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Target axes.
+    cells : list of dict
+        Cell data dicts returned by _load_raster_cells.
+    window : float, optional
+        Display window length in seconds (default 60).
+    """
+
     n = len(cells)
     if n == 0:
         ax.text(0.5, 0.5, 'No trace data found', transform=ax.transAxes,
@@ -825,6 +1109,20 @@ def _plot_raster(ax, cells, window=60.0):
 
 
 def _draw_grouped_violins(ax, all_records, values_fn, ylabel):
+    """Draw grouped violin plots by sensor for one performance metric.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Target axes.
+    all_records : dict
+        Benchmark records keyed by method name.
+    values_fn : callable
+        Function mapping a record dict to a scalar metric value.
+    ylabel : str
+        Y-axis label.
+    """
+
     all_flat     = [r for recs in all_records.values() for r in recs]
     present      = sorted(set(_get_sensor(r['dataset']) for r in all_flat)
                           - _EXCLUDED_SENSORS)
@@ -875,17 +1173,25 @@ def _draw_grouped_violins(ax, all_records, values_fn, ylabel):
 
 
 def plot_figure(data_dir):
+    """Load all benchmark data and save figure 4.
+
+    Parameters
+    ----------
+    data_dir : str
+        Directory containing ground-truth result NPZ files.
+    """
+
     raster_cells_npz = os.path.join(data_dir, 'raster_cells.npz')
 
     print('Loading results...')
     all_records = _load_all(data_dir)
     if not all_records:
-        print(f'No result files found in {data_dir}. Run --mode test first.')
+        print('No result files found in {}. Run --mode test first.'.format(data_dir))
         return
-    print(f'Loaded {sum(len(v) for v in all_records.values())} records '
-          f'across {len(all_records)} methods.')
+    print('Loaded {} records across {} methods.'.format(
+        sum(len(v) for v in all_records.values()), len(all_records)))
 
-    print(f'  Building SNR lookup and filtering cells below {SNR_THRESHOLD}...')
+    print('  Building SNR lookup and filtering cells below {}...'.format(SNR_THRESHOLD))
     snr_lookup = _build_snr_lookup(data_dir)
     n_before = sum(len(v) for v in all_records.values())
     for method_key in list(all_records.keys()):
@@ -894,12 +1200,12 @@ def plot_figure(data_dir):
             if snr_lookup.get((r['dataset'], r.get('cell_idx', -1)), 0.0) >= SNR_THRESHOLD
         ]
     n_after = sum(len(v) for v in all_records.values())
-    print(f'  Excluded {n_before - n_after} cells (SNR < {SNR_THRESHOLD}), '
-          f'{n_after} remaining.')
+    print('  Excluded {} cells (SNR < {}), {} remaining.'.format(
+        n_before - n_after, SNR_THRESHOLD, n_after))
 
     print('  Loading example cells for raster...')
     cells = _load_raster_cells(data_dir, raster_cells_npz, window=30.0)
-    print(f'  Found {len(cells)} example cells.')
+    print('  Found {} example cells.'.format(len(cells)))
 
     fig = plt.figure(figsize=(6.0, 7.0), dpi=200)
     gs  = gridspec.GridSpec(3, 1, figure=fig,
@@ -929,12 +1235,12 @@ def plot_figure(data_dir):
     for ext in ('png', 'svg'):
         out = os.path.join(data_dir, f'full_ground_truth_comparison.{ext}')
         plt.savefig(out, bbox_inches='tight')
-        print(f'  Saved {out}')
+        print('  Saved {}.'.format(out))
     plt.close(fig)
 
 
-
 def main():
+
     parser = argparse.ArgumentParser(
         description='Figure 4 — Full CASCADE ground-truth benchmark'
     )
@@ -964,6 +1270,4 @@ def main():
 
 
 if __name__ == '__main__':
-
     main()
-

@@ -828,13 +828,6 @@ def deconv_from_caiman(datadir, hz=None, outdir=None, save_mat=False, params=Non
 
 
 def _build_parser():
-    """Build the argparse CLI parser with suite2p/caiman/array source flags and all options.
-
-    Returns
-    -------
-    argparse.ArgumentParser
-        Fully configured parser for the fMCSI CLI.
-    """
 
     parser = argparse.ArgumentParser(
         prog='fMCSI',
@@ -922,13 +915,6 @@ def _build_parser():
 
 
 def main(argv=None):
-    """CLI entry point, dispatches to the appropriate deconv_from_* function.
-
-    Parameters
-    ----------
-    argv : list of str, optional
-        Argument list. Defaults to sys.argv[1:] when None.
-    """
 
     parser = _build_parser()
     args = parser.parse_args(argv)
