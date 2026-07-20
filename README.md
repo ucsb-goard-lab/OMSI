@@ -124,16 +124,13 @@ results = OMSI.deconv_from_array(
 
 Any key left out of `params` falls back to its default below. The frame
 rate (`f`) is always taken from `hz` (or read automatically from
-suite2p/CaImAn metadata) and should not be set inside `params` — it is
+suite2p/CaImAn metadata) and should not be set inside `params` -- it is
 overwritten by `hz` regardless.
-
-How the per-cell MCMC posterior samples are turned into a single reported
-spike train.
 
 | Parameter | Default | Options | Description |
 |---|---|---|---|
-| `spike_method` | `'last'` | `'last'`, `'map'`, `'prob'` | `'last'`: return the final post-burn-in posterior sample directly, mirroring CaImAn's `cont_ca_sampler` (recommended default). `'map'`: score every posterior sample against the posterior-mean probability trace (penalizing spike counts above the expected count) and keep the best-scoring sample. `'prob'` (or any other value): smooth the per-frame spike-probability trace and detect peaks, separating "real" spikes from noise peaks with Otsu thresholding. |
-| `f` | — (sampler falls back to `10` if omitted) | float, Hz | Imaging frame rate. Set via the `hz` argument (or auto-read from suite2p/CaImAn metadata) — `deconv_from_array`/`deconv_from_suite2p`/`deconv_from_caiman` always overwrite `params['f']` with `hz`, so it doesn't need to be (and shouldn't be) set inside `params` directly. |
+| `spike_method` | `'last'` | `'last'`, `'map'`, `'prob'` | `'last'`: return the final post-burn-in posterior sample directly, mirroring CaImAn's `cont_ca_sampler`. `'map'`: score every posterior sample against the posterior-mean probability trace (penalizing spike counts above the expected count) and keep the best-scoring sample. `'prob'` (or any other value): smooth the per-frame spike-probability trace and detect peaks, separating "real" spikes from noise peaks with Otsu thresholding. |
+| `f` | -- (sampler falls back to `10` if omitted) | float, Hz | Imaging frame rate. Set via the `hz` argument (or auto-read from suite2p/CaImAn metadata) -- `deconv_from_array`/`deconv_from_suite2p`/`deconv_from_caiman` always overwrite `params['f']` with `hz`, so it doesn't need to be (and shouldn't be) set inside `params` directly. |
 | `p` | `2` | `1`, `2` | Order of the autoregressive calcium kernel: `1` is a single decaying exponential (rise time ignored), `2` models both rise and decay. Ignored if `g` is given. |
 | `g` | `None` | array-like of length `p`, or `None` | Explicit AR coefficients. `None` auto-estimates them per cell from the trace. |
 | `defg` | `[0.6, 0.95]` | `[g_rise, g_decay]` | Fallback rise/decay poles used when the per-cell time-constant estimate is unstable (complex, negative, or explosive). |

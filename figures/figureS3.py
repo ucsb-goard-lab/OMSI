@@ -248,7 +248,7 @@ def plot_figure(data_dir=_DEFAULT_DATA_DIR):
 def main():
 
     parser = argparse.ArgumentParser(
-        description='Figure S3 — CASCADE performance at 7.5 Hz vs 30 Hz'
+        description='Figure S3 -- CASCADE performance at 7.5 Hz vs 30 Hz'
     )
     parser.add_argument('--mode', required=True, choices=['test', 'plot'],
                         help='"test" runs inference and writes NPZ; '

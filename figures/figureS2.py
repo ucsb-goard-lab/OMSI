@@ -618,7 +618,7 @@ def plot_figure(data_dir=_DEFAULT_DATA_DIR, out_dir=_DEFAULT_OUT_DIR):
 def main():
 
     parser = argparse.ArgumentParser(
-        description='Figure S2 — per-sensor CosMIC distributions and example cells'
+        description='Figure S2 -- per-sensor CosMIC distributions and example cells'
     )
     parser.add_argument('--data-dir', default=_DEFAULT_DATA_DIR,
                         help='figure4 data directory (default: data/fig4)')

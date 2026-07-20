@@ -443,7 +443,7 @@ def print_stats(data_dir=_DEFAULT_DATA_DIR):
         rows.append(('CASCADE', 'cascade', cascade_thresholds))
 
     print('\n' + '='*72)
-    print('FIGURE S1 STATISTICS — maximum performance vs detection threshold')
+    print('FIGURE S1 STATISTICS -- maximum performance vs detection threshold')
     print('='*72)
 
     for method, prefix, thresholds in rows:

@@ -788,11 +788,11 @@ def run_fmcsi_init_comparison(data_dir):
     else:
         foopsi_fb = np.full(_N_CELLS, np.nan)
 
-    print('NNLS   — mean/cell: {:.2f}s  '
+    print('NNLS   -- mean/cell: {:.2f}s  '
           'mean samples: {}  '
           'mean Fb: {:.3f}'.format(
               np.mean(nnls_times), int(np.mean(nnls_nsamples)), np.nanmean(nnls_fb)))
-    print('FOOPSI — mean/cell: {:.2f}s  '
+    print('FOOPSI -- mean/cell: {:.2f}s  '
           'mean samples: {}  '
           'mean Fb: {:.3f}'.format(
               np.mean(foopsi_times), int(np.mean(foopsi_nsamples)), np.nanmean(foopsi_fb)))
@@ -926,9 +926,9 @@ def plot_fmcsi_init_comparison(data_dir):
     ax_f.hist(valid_n, bins=rbins, color=_NNLS_COLOR,   alpha=0.6,
               label='NNLS-initialized',   edgecolor='none')
 
-    print('Average $F_\\beta$ (β=0.5) — NNLS init: {:.3f}  FOOPSI init: {:.3f}'.format(
+    print('Average $F_\\beta$ (β=0.5) -- NNLS init: {:.3f}  FOOPSI init: {:.3f}'.format(
         np.nanmean(valid_n), np.nanmean(valid_f)))
-    print('Average time per cell (sec) — NNLS init: {:.3f}  FOOPSI init: {:.3f}'.format(
+    print('Average time per cell (sec) -- NNLS init: {:.3f}  FOOPSI init: {:.3f}'.format(
         np.mean(nnls_times), np.mean(foopsi_times)))
     ax_f.set_xlabel('$F_\\beta$')
     ax_f.set_ylabel('cells')

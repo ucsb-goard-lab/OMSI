@@ -1242,7 +1242,7 @@ def plot_figure(data_dir):
 def main():
 
     parser = argparse.ArgumentParser(
-        description='Figure 4 — Full CASCADE ground-truth benchmark'
+        description='Figure 4 -- Full CASCADE ground-truth benchmark'
     )
     parser.add_argument('--mode', required=True, choices=['test', 'plot'],
                         help='test: run inference; plot: make figure')
