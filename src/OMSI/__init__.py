@@ -65,7 +65,7 @@ and hz (the sampling rate). Pass `save_mat=True` to also write a .mat file.
 DMM, Feb 2026
 """
 
-__version__ = '1.0.0'
+__version__ = '1.1.0'
 
 __all__ = [
 
