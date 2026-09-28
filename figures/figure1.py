@@ -10,6 +10,8 @@ _oasis_spikes_from_s
     Convert OASIS deconvolved signal to spike times.
 _run_cascade_inference
     Run CASCADE spike inference via subprocess.
+draw_sim_snr
+    Draw target SNRs from figure 3's measured SNR distribution.
 _fbeta
     Compute F-beta score from precision and recall arrays.
 _mad
@@ -51,7 +53,7 @@ import matplotlib.gridspec as gridspec
 import matplotlib.ticker as ticker
 import matplotlib as mpl
 from scipy.signal import find_peaks
-from oasis.functions import deconvolve as oasis_deconv
+from oasis.functions import deconvolve as oasis_deconv, estimate_parameters as oasis_estimate
 
 import OMSI
 from run_pnev_MCMC import run_matlab_pnevMCMC
@@ -74,10 +76,14 @@ FS       = 30.0
 DURATION = 60 * 20
 TAU      = 1.2
 N_CELLS  = 500
-# Simulated SNR is drawn log-uniformly over this range. SNR here is the
-# generator's definition, (99th - 1st percentile of the clean trace) / noise SD,
-# the same one used for the SNR axis of figure 2.
-SNR_RANGE = (2.0, 20.0)
+# Each cell's SNR is set to match figure 3's Allen cells. SNR here is the
+# measured SNR used by figure labels and OMSI's SNR screen: (99th - 8th
+# percentile) / (median |diff| / 0.6745), taken on the final noisy trace. The
+# targets are drawn from figure 3's distribution: all 113 cells shown there
+# (incl. low-kurtosis cells), averaged to 30 Hz to match this simulation's
+# frame rate. These are that distribution's 0th, 5th, ..., 100th percentiles.
+SNR_QUANTILES = [2.81, 3.70, 4.39, 5.48, 6.71, 8.48, 12.28, 14.22, 15.13, 19.21, 28.32,
+                 32.63, 41.05, 44.27, 54.76, 62.92, 74.49, 86.33, 140.48, 234.07, 372.40]
 # Departures from the idealized model: small spike-to-spike amplitude
 # variation (CV), a slow baseline drift (SD in single-spike peaks, timescale in
 # seconds), and small cell-to-cell variation in the decay constant (CV around
@@ -87,7 +93,7 @@ DRIFT_SD        = 0.2
 DRIFT_TIMESCALE = 60.0
 TAU_CV          = 0.05
 BETA     = 0.5
-USE_STRICT_ACCURACY = False  # Hungarian one-to-one matching (compute_accuracy_strict).
+USE_STRICT_ACCURACY = True  # Hungarian one-to-one matching (compute_accuracy_strict).
 
 COLORS = {
     'OMSI':      '#4C72B0',
@@ -188,6 +194,29 @@ def _run_cascade_inference(dff, fs, n_cells, data_dir, prefix='fig1_cascade', de
     return cascade_probs, cascade_spikes, cascade_time
 
 
+def draw_sim_snr(n):
+    """ Draw n target SNRs from figure 3's distribution (see SNR_QUANTILES).
+
+    Stratified inverse-CDF sampling, interpolating the percentile table in
+    log space.
+
+    Parameters
+    ----------
+    n : int
+        Number of cells.
+
+    Returns
+    -------
+    np.ndarray
+        Target measured SNR per cell.
+    """
+    pct = np.linspace(0, 100, len(SNR_QUANTILES))
+    # Stratified: one draw per equal-probability slice, then shuffled, so even a
+    # modest population reproduces the distribution closely.
+    u = np.random.permutation((np.arange(n) + np.random.uniform(0, 1, n)) / n * 100)
+    return np.exp(np.interp(u, pct, np.log(SNR_QUANTILES)))
+
+
 def _fbeta(precision, recall):
     """ Compute the F-beta score from precision and recall arrays.
 
@@ -250,12 +279,14 @@ def run_test(data_dir=_DEFAULT_DATA_DIR, run_omsi=True, run_matlab=True,
     os.makedirs(data_dir, exist_ok=True)
 
     print('Generating synthetic spikes and calcium traces...')
-    sim_snr = np.exp(np.random.uniform(np.log(SNR_RANGE[0]), np.log(SNR_RANGE[1]), N_CELLS))
+    sim_snr = draw_sim_snr(N_CELLS)
     noisy, true_spikes, clean, timestamps, firing_rates, kurtosis, sim_params = generate_synthetic_data(
-        n_cells=N_CELLS, fs=FS, duration=DURATION, tau=TAU, snr=sim_snr,
+        n_cells=N_CELLS, fs=FS, duration=DURATION, tau=TAU, measured_snr=sim_snr,
         amp_cv=AMP_CV, tau_cv=TAU_CV, drift_sd=DRIFT_SD, drift_timescale=DRIFT_TIMESCALE,
         return_params=True
     )
+    # Achieved SNRs (targets may be swapped between cells; see generate_synthetic_data).
+    sim_snr = sim_params['measured_snr']
     timestamps = np.arange(noisy.shape[1]) / FS
 
     params = {
@@ -327,14 +358,15 @@ def run_test(data_dir=_DEFAULT_DATA_DIR, run_omsi=True, run_matlab=True,
         t0 = time.time()
         oasis_spikes = []
         oasis_tpc = np.zeros(N_CELLS)
-        diff_oasis = np.diff(noisy, axis=1)
-        sigmas = np.median(np.abs(diff_oasis), axis=1) / (0.6745 * np.sqrt(2))
-        sigmas = np.maximum(sigmas, 1e-9)
         for i in range(N_CELLS):
             t_cell = time.time()
-            g = np.exp(-1 / (FS * TAU))
-            _, s, _, _, _ = oasis_deconv(noisy[i], g=(g,), sn=sigmas[i], penalty=1)
-            oasis_spikes.append(_oasis_spikes_from_s(s, sigmas[i], FS))
+            # OASIS defaults: single-exponential (AR(1)) kernel with the decay
+            # and noise level both estimated from the trace.
+            _, s, _, _, _ = oasis_deconv(noisy[i].astype(np.float64))
+            # Same noise estimate OASIS makes internally by default, used as the
+            # spike-detection threshold.
+            sn = max(float(oasis_estimate(noisy[i].astype(np.float64), p=1, fudge_factor=0.98)[1]), 1e-9)
+            oasis_spikes.append(_oasis_spikes_from_s(s, sn, FS))
             oasis_tpc[i] = time.time() - t_cell
         oasis_time = time.time() - t0
         oasis_prec, oasis_rec, oasis_F1 = OMSI.compute_accuracy_strict(true_spikes, oasis_spikes)
@@ -447,7 +479,7 @@ def _select_example_cells(mine_res, oasis_res, cascade_res, matlab_res,
         Minimum ground-truth spikes required in the window.
     target_snrs : tuple, optional
         One cell is chosen per target: the unused cell with the closest SNR.
-        SNR is the simulated SNR ('sim_snr', see SNR_RANGE); results saved
+        SNR is the target measured SNR ('sim_snr', see SNR_QUANTILES); results saved
         before it was stored fall back to the SNR measured from the trace.
 
     Returns

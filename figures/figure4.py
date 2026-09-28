@@ -101,7 +101,7 @@ from matplotlib.patches import Patch
 import OMSI
 import OMSI.helpers as helpers
 from run_pnev_MCMC import run_matlab_pnevMCMC
-from oasis.functions import deconvolve as oasis_deconv
+from oasis.functions import deconvolve as oasis_deconv, estimate_parameters as oasis_estimate
 from OMSI._win_perf import no_power_throttling
 from stats_helpers import signed_rank, print_test_header, print_test_row
 
@@ -765,13 +765,14 @@ def process_dataset(ds_folder, ground_truth_dir, model, loo_models_dir=None):
                 spikes_list.append(np.array([], dtype=np.float64))
 
     elif model == 'oasis':
-        g_decay = float(np.exp(-1.0 / (tau * fs)))
         for cell in cells:
             fluo  = cell['fluo'].astype(np.float64)
-            diff  = np.diff(fluo)
-            sigma = max(float(np.median(np.abs(diff)) / (0.6745 * np.sqrt(2))), 1e-9)
             try:
-                _, s, _, _, _ = oasis_deconv(fluo, g=(g_decay,), sn=sigma, penalty=1)
+                # OASIS defaults: single-exponential kernel, decay and noise
+                # level estimated from each trace.
+                _, s, _, _, _ = oasis_deconv(fluo)
+                # Same noise estimate OASIS makes internally by default.
+                sigma = max(float(oasis_estimate(fluo, p=1, fudge_factor=0.98)[1]), 1e-9)
                 spikes_list.append(_oasis_spikes_from_s(s, sigma, cell['fs']))
                 probs_list.append(s.astype(np.float32))
             except Exception as exc:

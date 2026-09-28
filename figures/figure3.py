@@ -143,7 +143,7 @@ import h5py
 from scipy.signal import butter, filtfilt, find_peaks
 from scipy.ndimage import percentile_filter, gaussian_filter1d
 from scipy.stats import kurtosis as sci_kurtosis
-from oasis.functions import deconvolve
+from oasis.functions import deconvolve, estimate_parameters
 
 import OMSI
 from run_pnev_MCMC import run_matlab_pnevMCMC
@@ -709,11 +709,10 @@ def _run_and_save_lowkurt_group(dff, true_spikes, fs, tau, label, data_dir,
     if 'time_oasis' not in state:
         print("  Running OASIS...")
         t0 = time.time()
-        diff   = np.diff(dff, axis=1)
-        sigmas = np.maximum(np.median(np.abs(diff), axis=1) / (0.6745 * np.sqrt(2)), 1e-9)
-        g = np.exp(-1 / (fs * tau))
+        # OASIS defaults: single-exponential kernel, decay and noise level
+        # estimated from each trace.
         state['oasis_probs'] = np.array([
-            deconvolve(dff[i], g=(g,), sn=sigmas[i], penalty=1)[1]
+            deconvolve(np.asarray(dff[i], dtype=np.float64))[1]
             for i in range(dff.shape[0])])
         state['time_oasis'] = time.time() - t0
         _save()
@@ -923,16 +922,17 @@ def _run_and_save_allen_group(dff, true_spikes, fs, tau, label, data_dir,
 
     print("  Running OASIS...")
     t0 = time.time()
-    diff   = np.diff(dff, axis=1)
-    sigmas = np.median(np.abs(diff), axis=1) / (0.6745 * np.sqrt(2))
-    sigmas = np.maximum(sigmas, 1e-9)
     oasis_probs  = []
     oasis_spikes = []
     for i in range(dff.shape[0]):
-        g = np.exp(-1 / (fs * tau))
-        _, s, _, _, _ = deconvolve(dff[i], g=(g,), sn=sigmas[i], penalty=1)
+        # OASIS defaults: single-exponential kernel, decay and noise level
+        # estimated from each trace.
+        y = np.asarray(dff[i], dtype=np.float64)
+        _, s, _, _, _ = deconvolve(y)
+        # Same noise estimate OASIS makes internally by default.
+        sn = max(float(estimate_parameters(y, p=1, fudge_factor=0.98)[1]), 1e-9)
         oasis_probs.append(s)
-        oasis_spikes.append(_oasis_spikes_from_s(s, sigmas[i], fs))
+        oasis_spikes.append(_oasis_spikes_from_s(s, sn, fs))
     oasis_probs = np.array(oasis_probs)
     time_oasis  = time.time() - t0
 
@@ -1047,13 +1047,11 @@ def _run_and_save_omsi_group(dff, true_spikes, fs, tau, label, data_dir):
 
     print("  Running OASIS...")
     t0 = time.time()
-    diff   = np.diff(dff, axis=1)
-    sigmas = np.median(np.abs(diff), axis=1) / (0.6745 * np.sqrt(2))
-    sigmas = np.maximum(sigmas, 1e-9)
     oasis_probs  = []
     for i in range(dff.shape[0]):
-        g = np.exp(-1 / (fs * tau))
-        _, s, _, _, _ = deconvolve(dff[i], g=(g,), sn=sigmas[i], penalty=1)
+        # OASIS defaults: single-exponential kernel, decay and noise level
+        # estimated from each trace.
+        _, s, _, _, _ = deconvolve(np.asarray(dff[i], dtype=np.float64))
         oasis_probs.append(s)
     oasis_probs = np.array(oasis_probs)
     time_oasis  = time.time() - t0

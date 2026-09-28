@@ -134,7 +134,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 from scipy.signal import find_peaks
-from oasis.functions import deconvolve
+from oasis.functions import deconvolve, estimate_parameters
 
 import OMSI
 import OMSI.helpers as helpers
@@ -608,9 +608,13 @@ def _tbl_concat(tbls):
     return result
 
 
-def _oasis_spikes(dff, fs, tau, n_cells):
+def _oasis_spikes(dff, fs, n_cells):
     """
-    Run OASIS deconvolution on all cells.
+    Run OASIS deconvolution on all cells with OASIS's default settings.
+
+    OASIS fits a single-exponential (AR(1)) kernel and estimates the decay and
+    the noise level from each trace itself; neither is given to it. The spike
+    threshold uses that same noise estimate.
 
     Parameters
     ----------
@@ -618,8 +622,6 @@ def _oasis_spikes(dff, fs, tau, n_cells):
         Delta F over F fluorescence traces.
     fs : float
         Sampling rate in Hz.
-    tau : float
-        Calcium decay time constant in seconds.
     n_cells : int
         Number of cells.
 
@@ -630,14 +632,13 @@ def _oasis_spikes(dff, fs, tau, n_cells):
     calcium : list of ndarray
         Denoised calcium traces for each cell.
     """
-    diff = np.diff(dff, axis=1)
-    sigmas = np.median(np.abs(diff), axis=1) / (0.6745 * np.sqrt(2))
-    sigmas = np.maximum(sigmas, 1e-9)
     spikes, calcium = [], []
     for i in range(n_cells):
-        g = np.exp(-1 / (fs * tau))
-        c, s, _, _, _ = deconvolve(dff[i], g=(g,), sn=sigmas[i], penalty=1)
-        spikes.append(_oasis_spikes_from_s(s, sigmas[i], fs))
+        y = np.asarray(dff[i], dtype=np.float64)
+        c, s, _, _, _ = deconvolve(y)
+        # Same noise estimate OASIS makes internally by default.
+        sn = max(float(estimate_parameters(y, p=1, fudge_factor=0.98)[1]), 1e-9)
+        spikes.append(_oasis_spikes_from_s(s, sn, fs))
         calcium.append(c)
     return spikes, calcium
 
@@ -893,7 +894,7 @@ def benchmark_sweeps(data_dir, run_oasis=True, run_matlab=True, run_mine=True,
         if run_oasis:
             print('\nRunning OASIS (baseline)...')
             t0 = time.time()
-            oas_spk, oas_cal = _oasis_spikes(dff, fs, tau, n_cells)
+            oas_spk, oas_cal = _oasis_spikes(dff, fs, n_cells)
             time_oasis = time.time() - t0
             results.append(_row('Sweeps', 'OASIS', tau, fs, time_oasis,
                                 _metrics(true_spikes, oas_spk, true_events, fs),
@@ -1061,7 +1062,7 @@ def benchmark_scalability(data_dir, run_oasis=True, run_matlab=True, run_mine=Tr
         if run_oasis:
             try:
                 t0 = time.time()
-                _oasis_spikes(dff, fs, tau, n_cells)
+                _oasis_spikes(dff, fs, n_cells)
                 t_oasis = time.time() - t0
                 results.append({**base, 'Model': 'OASIS', 'Time': t_oasis,
                                 'Samples_per_sec': np.nan})
@@ -1191,7 +1192,7 @@ def benchmark_params(data_dir, run_oasis=True, run_matlab=True, run_mine=True,
 
                 if run_oasis:
                     t0 = time.time()
-                    oas_spk, _ = _oasis_spikes(dff, fs, tau, n_cells)
+                    oas_spk, _ = _oasis_spikes(dff, fs, n_cells)
                     t_oasis = time.time() - t0
                     results.append(_row(experiment, 'OASIS', tau, fs, t_oasis,
                                         _metrics(true_spikes, oas_spk, true_events, fs), **extra))
@@ -1330,7 +1331,7 @@ def benchmark_noise_sensitivity(data_dir, run_oasis=True, run_matlab=True, run_m
 
                 if run_oasis:
                     t0 = time.time()
-                    oas_spk, _ = _oasis_spikes(dff, fs, tau, n_cells)
+                    oas_spk, _ = _oasis_spikes(dff, fs, n_cells)
                     t_oasis = time.time() - t0
                     results.append({**base, 'Model': 'OASIS', 'Time': t_oasis,
                                     **km(oas_spk)})
@@ -1476,7 +1477,7 @@ def benchmark_firing_rate_sensitivity(data_dir, run_oasis=True, run_matlab=True,
         print('\nRunning OASIS...')
         try:
             t0 = time.time()
-            oas_spk, oas_cal = _oasis_spikes(dff, fs, tau, n_cells)
+            oas_spk, oas_cal = _oasis_spikes(dff, fs, n_cells)
             total_time = time.time() - t0
             for i in range(n_cells):
                 all_results.append(per_cell('OASIS', i, oas_spk[i], np.nan))

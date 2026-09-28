@@ -80,6 +80,19 @@ def estimate_real_properties(suite2p_dir):
 
 
 
+def _measured_snr(y):
+    """ SNR as figure labels and OMSI's SNR screen measure it.
+
+    (99th - 8th percentile) / (median |first difference| / 0.6745), NaNs ignored.
+    """
+    y = np.asarray(y, dtype=np.float64)
+    y = y[np.isfinite(y)]
+    if len(y) < 2:
+        return 0.0
+    mad = np.median(np.abs(np.diff(y))) / 0.6745
+    return (np.percentile(y, 99) - np.percentile(y, 8)) / (mad + 1e-9)
+
+
 def generate_synthetic_data(
         n_cells=400,
         fs=30.0,
@@ -93,6 +106,7 @@ def generate_synthetic_data(
         tau_cv=0.0,
         drift_sd=0.0,
         drift_timescale=60.0,
+        measured_snr=None,
         return_params=False
     ):
     """ Generate synthetic calcium traces and ground-truth spike trains.
@@ -127,6 +141,17 @@ def generate_synthetic_data(
         so SNR keeps its meaning.
     drift_timescale : float, optional
         Timescale of the drift in seconds (Gaussian smoothing SD of white noise).
+    measured_snr : array-like, optional
+        Per-cell target for the SNR as measured on the final noisy trace (drift
+        included), using the same formula as figure labels and OMSI's SNR
+        screen: (99th - 8th percentile) / (median |diff| / 0.6745). The noise
+        level of each cell is found by bisection to hit its target. Overrides
+        snr and the kurtosis-based noise. A cell whose trace cannot reach its
+        target even with almost no noise (busy cells, whose frequent rises
+        inflate the difference-based noise estimate) swaps targets with a cell
+        that can, so the set of SNRs in the population is kept. Targets below
+        what pure noise measures (~2.6) cannot be reached; those cells get
+        the closest value.
     return_params : bool, optional
         If True, also return a dict of the per-cell simulation parameters.
 
@@ -145,8 +170,9 @@ def generate_synthetic_data(
     gen_kurtosis : np.ndarray
         Kurtosis of each noisy trace.
     params : dict
-        Only if return_params: 'tau' (per-cell decay constants, s) and
-        'drift_sd' (realized SD of each cell's drift).
+        Only if return_params: 'tau' (per-cell decay constants, s),
+        'drift_sd' (realized SD of each cell's drift) and 'measured_snr'
+        (SNR measured on each final noisy trace).
     """
     n_frames = int(fs * duration)
     t = np.arange(n_frames) / fs
@@ -238,6 +264,7 @@ def generate_synthetic_data(
     target_kurtosis = np.clip(target_kurtosis, min_k, max_k)
 
     actual_snrs = []
+    unit_noise = np.zeros_like(noisy_traces) if measured_snr is not None else None
 
     for i in range(n_cells):
         trace = clean_traces[i]
@@ -253,6 +280,13 @@ def generate_synthetic_data(
             sigma = 1.0
             noisy_traces[i] = np.random.normal(0, sigma, size=len(trace))
             actual_snrs.append(0.0)
+            continue
+
+        if measured_snr is not None:
+            # Noise is scaled per cell after drift is added (see below).
+            unit_noise[i] = np.random.normal(0, 1, size=len(trace))
+            noisy_traces[i] = trace
+            actual_snrs.append(np.nan)
             continue
 
         if snr is not None:
@@ -292,9 +326,39 @@ def generate_synthetic_data(
             noisy_traces[i] += d
             drift_real[i] = d.std()
 
+    if measured_snr is not None:
+        # Bisection on the noise SD (log scale) so the measured SNR of the final
+        # trace matches each cell's target; measured SNR falls as noise grows.
+        targets = np.array(np.broadcast_to(np.asarray(measured_snr, dtype=float), (n_cells,)))
+        # Highest SNR each trace can reach (almost no noise). Unreachable
+        # targets are swapped with a cell that can reach them and whose own
+        # target this cell can reach, choosing the closest such target.
+        ceiling = np.array([
+            _measured_snr(noisy_traces[i] + max(float(np.ptp(clean_traces[i])), 1e-9) * 1e-5 * unit_noise[i])
+            for i in range(n_cells)])
+        for i in np.argsort(-targets):
+            if targets[i] <= 0.99 * ceiling[i]:
+                continue
+            ok = np.where((ceiling >= targets[i] / 0.99) & (targets <= 0.99 * ceiling[i]))[0]
+            if len(ok):
+                j = ok[np.argmin(np.abs(np.log(targets[ok] / targets[i])))]
+                targets[i], targets[j] = targets[j], targets[i]
+        for i in range(n_cells):
+            base = noisy_traces[i].copy()
+            scale = max(float(np.ptp(clean_traces[i])), 1e-9)
+            lo, hi = np.log(scale * 1e-5), np.log(scale * 1e3)
+            for _ in range(50):
+                mid = 0.5 * (lo + hi)
+                if _measured_snr(base + np.exp(mid) * unit_noise[i]) > targets[i]:
+                    lo = mid
+                else:
+                    hi = mid
+            noisy_traces[i] = base + np.exp(0.5 * (lo + hi)) * unit_noise[i]
+
     gen_kurtosis = OMSI.compute_kurtosis(noisy_traces)
 
     if return_params:
         return (noisy_traces, true_spike_times, clean_traces, t, firing_rates, gen_kurtosis,
-                {'tau': cell_tau, 'drift_sd': drift_real})
+                {'tau': cell_tau, 'drift_sd': drift_real,
+                 'measured_snr': np.array([_measured_snr(y) for y in noisy_traces])})
     return noisy_traces, true_spike_times, clean_traces, t, firing_rates, gen_kurtosis
