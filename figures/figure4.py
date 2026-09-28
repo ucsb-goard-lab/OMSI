@@ -288,7 +288,7 @@ def _train_loo_model(ds_folder, fs, ground_truth_dir, loo_models_dir):
     smoothing, causal = _loo_smoothing(fs)
     print('  Training LOO model {} on {} datasets (held out: {})...'.format(
         model_name, len(training), ds_folder))
-    cmd = [shutil.which('conda') or 'conda', 'run', '-n', 'cascade_gpu', 'python', _CASCADE_SCRIPT,
+    cmd = [shutil.which('conda') or 'conda', 'run', '-n', 'cascade', 'python', _CASCADE_SCRIPT,
            '--mode', 'loo-train',
            '--model-name', model_name,
            '--loo-models-dir', loo_models_dir,
@@ -796,7 +796,7 @@ def process_dataset(ds_folder, ground_truth_dir, model, loo_models_dir=None):
                 model_name = _train_loo_model(ds_folder, fs, ground_truth_dir, loo_models_dir)
                 print('  CASCADE LOO model: {}.'.format(model_name))
                 subprocess.run(
-                    [shutil.which('conda') or 'conda', 'run', '-n', 'cascade_gpu', 'python', _CASCADE_SCRIPT,
+                    [shutil.which('conda') or 'conda', 'run', '-n', 'cascade', 'python', _CASCADE_SCRIPT,
                      '--mode', 'inference',
                      '--model', model_name,
                      '--model-folder', loo_models_dir,
@@ -1582,7 +1582,7 @@ def main():
                         help='test: run inference; plot: make figure; print: print stats')
     parser.add_argument('--data-dir', default=_DEFAULT_DATA_DIR,
                         help='Directory for output data/figures')
-    parser.add_argument('--ground-truth-dir', default=r'C:\Users\dmartins\Documents\GitHub\Cascade\Ground_truth',
+    parser.add_argument('--ground-truth-dir', default='/home/dylan/Documents/Github/Cascade/Ground_truth',
                         help='Path to CASCADE Ground_truth/ folder (test mode)')
     parser.add_argument('--loo-models-dir', default=None,
                         help='Where leave-one-out CASCADE models are trained and cached '
