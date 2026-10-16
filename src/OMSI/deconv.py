@@ -419,7 +419,7 @@ def deconv(Y, params=None, true_spikes=None, benchmark=False, lag_s=None, num_cp
             'Ca_trace': tradpy_calcium,
             'prob_trace': tradpy_prob,
             'spikes': spikes_obj,
-            'spike_train': _spikes_to_train(res['spikes'], n_frames, fs)
+            'spike_train': _spikes_to_train(spikes_obj, n_frames, fs)
         }
     elif benchmark is True:
         return {
@@ -494,7 +494,7 @@ def _spikes_to_train(spike_times_list, n_frames, hz):
         sp = sp[np.isfinite(sp)]
         if len(sp) == 0:
             continue
-        frames = np.clip(np.round(sp * hz).astype(int), 0, n_frames - 1)
+        frames = np.clip(np.floor(sp * hz + 1e-6).astype(int), 0, n_frames - 1)
         np.add.at(train[i], frames, 1)
 
     return train
